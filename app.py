@@ -1,0 +1,63 @@
+"""QApplication subclass and lifecycle management."""
+
+import sys
+import ctypes
+
+from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+
+from database.connection import get_connection
+from database.queries import get_setting
+from capture.engine import CaptureEngine
+from ui.tray import TrayIcon, create_app_icon
+from ui.main_window import MainWindow
+
+# Tell Windows this is its own app (not grouped with python.exe in taskbar)
+ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("canopy.treetime.1")
+
+
+class TreetimeApp:
+    """Application controller — owns the DB, capture engine, tray, and window."""
+
+    def __init__(self):
+        self.qt_app = QApplication(sys.argv)
+        self.qt_app.setApplicationName("Treetime")
+        self.qt_app.setQuitOnLastWindowClosed(False)
+        self.qt_app.setWindowIcon(create_app_icon(128))
+
+        # Database
+        self.conn = get_connection()
+
+        # Read settings
+        poll_ms = int(get_setting(self.conn, "poll_interval_ms", "5000"))
+        idle_s = int(get_setting(self.conn, "idle_threshold_s", "300"))
+
+        # Capture engine
+        self.engine = CaptureEngine(self.conn, poll_interval_ms=poll_ms,
+                                    idle_threshold_s=idle_s)
+
+        # UI
+        self.main_window = MainWindow(self.conn, self.engine)
+        self.tray = TrayIcon()
+
+        # Connections
+        self.tray.show_window_requested.connect(self._show_main_window)
+        self.tray.quit_requested.connect(self._quit)
+        self.tray.pause_toggled.connect(self.engine.set_paused)
+        self.engine.activity_recorded.connect(self.tray.update_tracking_info)
+
+    def run(self) -> int:
+        self.tray.show()
+        self.engine.start()
+        self.main_window.show()
+        return self.qt_app.exec()
+
+    def _show_main_window(self):
+        self.main_window.show()
+        self.main_window.raise_()
+        self.main_window.activateWindow()
+
+    def _quit(self):
+        self.engine.stop()
+        self.conn.close()
+        self.qt_app.quit()

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Treetime (Dev)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["main.py"],
+      "port": 0
+    },
+    {
+      "name": "Treetime (Built Exe)",
+      "runtimeExecutable": "dist/Treetime/Treetime.exe",
+      "runtimeArgs": [],
+      "port": 0
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Inno Setup output
+installer_output/
+
+# Generated icon (can be regenerated)
+treetime.ico
+
+# IDE
+.vscode/
+.idea/
+
+# App data
+*.db
+
+# OS
+Thumbs.db
+.DS_Store
