@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QRectF, Signal, QDate
 from PySide6.QtGui import QPainter, QColor, QFont, QPen
 
-from ui.styles import color_for_process, IDLE_COLOR, get_theme
+from ui.styles import color_for_process, IDLE_COLOR, OFFLINE_COLOR, get_theme
 from ui.timeline.timeline_model import TimelineModel
 
 
@@ -173,12 +173,13 @@ class MemoryAidColumn(QWidget):
 
             if slot_activities:
                 by_proc = defaultdict(lambda: {"duration": 0, "title": "", "idle": False,
-                                               "process": "", "max_dur": 0})
+                                               "offline": False, "process": "", "max_dur": 0})
                 for seg, dur in slot_activities:
-                    key = "(idle)" if seg.idle else seg.process
+                    key = "(offline)" if seg.offline else ("(idle)" if seg.idle else seg.process)
                     by_proc[key]["duration"] += dur
                     by_proc[key]["process"] = seg.process
                     by_proc[key]["idle"] = seg.idle
+                    by_proc[key]["offline"] = seg.offline
                     if dur > by_proc[key]["max_dur"]:
                         by_proc[key]["title"] = seg.title
                         by_proc[key]["max_dur"] = dur
@@ -193,14 +194,18 @@ class MemoryAidColumn(QWidget):
                     title = info["title"]
 
                     # Color indicator
-                    bar_color = QColor(IDLE_COLOR if info["idle"]
-                                       else color_for_process(info["process"]))
+                    if info["offline"]:
+                        bar_color = QColor(OFFLINE_COLOR)
+                    elif info["idle"]:
+                        bar_color = QColor(IDLE_COLOR)
+                    else:
+                        bar_color = QColor(color_for_process(info["process"]))
                     painter.setBrush(bar_color)
                     painter.setPen(Qt.PenStyle.NoPen)
                     painter.drawRoundedRect(QRectF(entry_x, entry_y + 2, 4, item_h - 4), 2, 2)
 
                     # Check for keyword rule match — show dot
-                    if not info["idle"]:
+                    if not info["idle"] and not info["offline"]:
                         match = _match_cache.find_match(self._conn, info["process"], title)
                         if match:
                             painter.setBrush(QColor(match.color))
@@ -440,8 +445,21 @@ class ProjectsSidebar(QWidget):
             if p.id not in seen:
                 projects.append(p)
 
+        if not projects:
+            painter.setPen(QColor(t.text_muted))
+            painter.setFont(QFont("Segoe UI", 9))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                             "No projects yet\n\nGo to Projects tab\nto add some")
+            painter.end()
+            return
+
+        # Split into billable and non-billable
+        billable = [p for p in projects if p.billable]
+        non_billable = [p for p in projects if not p.billable]
+
         y = 8
-        for p in projects:
+
+        def _draw_project_row(p, y_pos):
             mins = project_times.get(p.id, 0)
             h_text = ""
             if mins >= 60:
@@ -451,27 +469,44 @@ class ProjectsSidebar(QWidget):
 
             painter.setBrush(QColor(p.color))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(QRectF(8, y, self.width() - 16, 32), 8, 8)
+            painter.drawRoundedRect(QRectF(8, y_pos, self.width() - 16, 32), 8, 8)
 
             painter.setPen(QColor("white"))
             painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
             fm = painter.fontMetrics()
             name = fm.elidedText(p.name, Qt.TextElideMode.ElideRight, self.width() - 88)
-            painter.drawText(QRectF(16, y, self.width() - 88, 32),
+            painter.drawText(QRectF(16, y_pos, self.width() - 88, 32),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                              name)
             if h_text:
                 painter.setFont(QFont("Segoe UI", 8))
-                painter.drawText(QRectF(self.width() - 72, y, 58, 32),
+                painter.drawText(QRectF(self.width() - 72, y_pos, 58, 32),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                                  h_text)
-            y += 40
+            return y_pos + 40
 
-        if not projects:
+        def _draw_section_header(label, y_pos):
             painter.setPen(QColor(t.text_muted))
-            painter.setFont(QFont("Segoe UI", 9))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                             "No projects yet\n\nGo to Projects tab\nto add some")
+            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            painter.drawText(QRectF(10, y_pos, self.width() - 20, 20),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             label)
+            return y_pos + 24
+
+        # Billable section
+        if billable:
+            if non_billable:  # Only show header if both sections exist
+                y = _draw_section_header("Billable", y)
+            for p in billable:
+                y = _draw_project_row(p, y)
+
+        # Non-billable section
+        if non_billable:
+            if billable:
+                y += 8
+            y = _draw_section_header("Non-billable", y)
+            for p in non_billable:
+                y = _draw_project_row(p, y)
 
         painter.end()
 
@@ -689,7 +724,7 @@ class TimelineWidget(QWidget):
             block_end = None
 
         for seg in segments:
-            if seg.idle:
+            if seg.idle or seg.offline:
                 _flush_block()
                 continue
 

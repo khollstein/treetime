@@ -17,6 +17,7 @@ class ActivitySegment:
     process: str
     title: str
     idle: bool
+    offline: bool = False
 
 
 @dataclass
@@ -73,6 +74,7 @@ class TimelineModel:
                 process=act.process,
                 title=act.title,
                 idle=act.idle,
+                offline=act.offline,
             )
             self._activity_segments.append(seg)
 
@@ -111,6 +113,6 @@ class TimelineModel:
             overlap_end = min(seg.end, end)
             if overlap_start < overlap_end:
                 seconds = (overlap_end - overlap_start).total_seconds()
-                key = seg.process if not seg.idle else "(idle)"
+                key = "(offline)" if seg.offline else ("(idle)" if seg.idle else seg.process)
                 result[key] = result.get(key, 0) + seconds
         return result

@@ -7,8 +7,9 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
 from database.connection import get_connection
-from database.queries import get_setting
+from database.queries import get_setting, insert_time_entry
 from capture.engine import CaptureEngine
+from capture.session_monitor import SessionMonitor
 from ui.tray import TrayIcon, create_app_icon
 from ui.main_window import MainWindow
 
@@ -40,11 +41,18 @@ class TreetimeApp:
         self.main_window = MainWindow(self.conn, self.engine)
         self.tray = TrayIcon()
 
+        # Session monitor for lock/unlock detection
+        self.session_monitor = SessionMonitor()
+        self.session_monitor.register()
+        self.session_monitor.session_locked.connect(self.engine.on_session_locked)
+        self.session_monitor.session_unlocked.connect(self.engine.on_session_unlocked)
+
         # Connections
         self.tray.show_window_requested.connect(self._show_main_window)
         self.tray.quit_requested.connect(self._quit)
         self.tray.pause_toggled.connect(self.engine.set_paused)
         self.engine.activity_recorded.connect(self.tray.update_tracking_info)
+        self.engine.offline_ended.connect(self._on_offline_ended)
 
     def run(self) -> int:
         self.tray.show()
@@ -57,7 +65,25 @@ class TreetimeApp:
         self.main_window.raise_()
         self.main_window.activateWindow()
 
+    def _on_offline_ended(self, start_dt, end_dt):
+        """Show Welcome Back dialog if offline duration exceeds threshold."""
+        threshold = int(get_setting(self.conn, "offline_welcome_threshold_s", "300"))
+        duration = (end_dt - start_dt).total_seconds()
+        if duration < threshold:
+            return
+
+        from ui.welcome_back_dialog import WelcomeBackDialog
+        self._show_main_window()
+        dlg = WelcomeBackDialog(self.conn, start_dt, end_dt, parent=self.main_window)
+        if dlg.exec():
+            project_id, note = dlg.result_data()
+            if project_id:
+                insert_time_entry(self.conn, project_id, start_dt, end_dt, note)
+        # Refresh timeline regardless
+        self.main_window.reload_timeline()
+
     def _quit(self):
+        self.session_monitor.cleanup()
         self.engine.stop()
         self.conn.close()
         self.qt_app.quit()

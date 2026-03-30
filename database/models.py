@@ -12,9 +12,14 @@ class Activity:
     title: str
     idle: bool
     duration_s: int
+    offline: bool = False
 
     @classmethod
     def from_row(cls, row) -> "Activity":
+        try:
+            offline = bool(row["offline"])
+        except (IndexError, KeyError):
+            offline = False
         return cls(
             id=row["id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -22,6 +27,7 @@ class Activity:
             title=row["title"],
             idle=bool(row["idle"]),
             duration_s=row["duration_s"],
+            offline=offline,
         )
 
 
@@ -32,22 +38,28 @@ class Project:
     client: str
     color: str
     keywords: str
+    billable: bool
     archived: bool
     created_at: datetime
 
     @classmethod
     def from_row(cls, row) -> "Project":
-        # Handle older DBs without keywords column
+        # Handle older DBs without keywords/billable columns
         try:
             keywords = row["keywords"]
         except (IndexError, KeyError):
             keywords = ""
+        try:
+            billable = bool(row["billable"])
+        except (IndexError, KeyError):
+            billable = True
         return cls(
             id=row["id"],
             name=row["name"],
             client=row["client"],
             color=row["color"],
             keywords=keywords or "",
+            billable=billable,
             archived=bool(row["archived"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )

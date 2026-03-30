@@ -14,6 +14,7 @@ class CaptureEngine(QObject):
     """Polls the active window at a fixed interval and stores activity."""
 
     activity_recorded = Signal(str, str, bool)  # process, title, idle
+    offline_ended = Signal(object, object)  # start_dt, end_dt
 
     def __init__(self, conn: sqlite3.Connection,
                  poll_interval_ms: int = 5000,
@@ -30,6 +31,10 @@ class CaptureEngine(QObject):
         self._last_title = None
         self._last_idle = None
         self._paused = False
+        # Offline state
+        self._is_offline = False
+        self._offline_start = None
+        self._offline_activity_id = None
 
     def start(self):
         self._timer.start(self._poll_interval_ms)
@@ -44,8 +49,50 @@ class CaptureEngine(QObject):
     def is_paused(self) -> bool:
         return self._paused
 
+    def on_session_locked(self):
+        """Called when the Windows session is locked."""
+        if self._is_offline:
+            return
+        self._is_offline = True
+        self._offline_start = datetime.now()
+        # Reset deduplication state
+        self._last_activity_id = None
+        self._last_process = None
+        self._last_title = None
+        self._last_idle = None
+        # Insert an offline activity row
+        self._offline_activity_id = queries.insert_activity(
+            self._conn,
+            timestamp=self._offline_start,
+            process="(offline)",
+            title="Screen locked",
+            idle=True,
+            duration_s=0,
+            offline=True,
+        )
+
+    def on_session_unlocked(self):
+        """Called when the Windows session is unlocked."""
+        if not self._is_offline:
+            return
+        end_time = datetime.now()
+        start_time = self._offline_start or end_time
+        duration = int((end_time - start_time).total_seconds())
+
+        # Update the offline activity row with the actual duration
+        if self._offline_activity_id and duration > 0:
+            queries.set_activity_duration(
+                self._conn, self._offline_activity_id, duration
+            )
+
+        self._is_offline = False
+        self._offline_activity_id = None
+
+        # Emit signal so app can show Welcome Back dialog
+        self.offline_ended.emit(start_time, end_time)
+
     def _poll(self):
-        if self._paused:
+        if self._paused or self._is_offline:
             return
 
         process, title = get_active_window_info()

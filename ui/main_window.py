@@ -150,6 +150,10 @@ class MainWindow(QMainWindow):
         if index == 0:
             self._timeline.reload()
 
+    def reload_timeline(self):
+        """Public method to force a timeline refresh (e.g. after offline assignment)."""
+        self._timeline.reload()
+
     def _on_activity_recorded(self, process: str, title: str, idle: bool):
         self._poll_count += 1
         if idle:

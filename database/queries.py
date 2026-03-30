@@ -13,11 +13,12 @@ from database.models import Activity, Project, TimeEntry
 # ── Activities ──────────────────────────────────────────────────────
 
 def insert_activity(conn: sqlite3.Connection, timestamp: datetime,
-                    process: str, title: str, idle: bool, duration_s: int) -> int:
+                    process: str, title: str, idle: bool, duration_s: int,
+                    offline: bool = False) -> int:
     cur = conn.execute(
-        "INSERT INTO activities (timestamp, process, title, idle, duration_s) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (timestamp.isoformat(), process, title, int(idle), duration_s),
+        "INSERT INTO activities (timestamp, process, title, idle, duration_s, offline) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (timestamp.isoformat(), process, title, int(idle), duration_s, int(offline)),
     )
     conn.commit()
     return cur.lastrowid
@@ -28,6 +29,16 @@ def update_activity_duration(conn: sqlite3.Connection, activity_id: int,
     conn.execute(
         "UPDATE activities SET duration_s = duration_s + ? WHERE id = ?",
         (add_seconds, activity_id),
+    )
+    conn.commit()
+
+
+def set_activity_duration(conn: sqlite3.Connection, activity_id: int,
+                          duration_s: int):
+    """Set the absolute duration of an activity (used for offline period updates)."""
+    conn.execute(
+        "UPDATE activities SET duration_s = ? WHERE id = ?",
+        (duration_s, activity_id),
     )
     conn.commit()
 
@@ -52,21 +63,23 @@ def get_activities_for_day(conn: sqlite3.Connection, day: date) -> list[Activity
 # ── Projects ────────────────────────────────────────────────────────
 
 def insert_project(conn: sqlite3.Connection, name: str, client: str = "",
-                   color: str = "#4A90D9", keywords: str = "") -> int:
+                   color: str = "#4A90D9", keywords: str = "",
+                   billable: bool = True) -> int:
     cur = conn.execute(
-        "INSERT INTO projects (name, client, color, keywords, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (name, client, color, keywords, datetime.now().isoformat()),
+        "INSERT INTO projects (name, client, color, keywords, billable, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (name, client, color, keywords, int(billable), datetime.now().isoformat()),
     )
     conn.commit()
     return cur.lastrowid
 
 
 def update_project(conn: sqlite3.Connection, project_id: int, name: str,
-                   client: str, color: str, keywords: str = ""):
+                   client: str, color: str, keywords: str = "",
+                   billable: bool = True):
     conn.execute(
-        "UPDATE projects SET name=?, client=?, color=?, keywords=? WHERE id=?",
-        (name, client, color, keywords, project_id),
+        "UPDATE projects SET name=?, client=?, color=?, keywords=?, billable=? WHERE id=?",
+        (name, client, color, keywords, int(billable), project_id),
     )
     conn.commit()
 
@@ -188,7 +201,7 @@ def get_hours_by_project(conn: sqlite3.Connection,
     end = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59).isoformat()
     rows = conn.execute(
         """
-        SELECT p.id, p.name, p.client, p.color,
+        SELECT p.id, p.name, p.client, p.color, p.billable,
                SUM(
                    (julianday(MIN(te.end_time, ?)) - julianday(MAX(te.start_time, ?)))
                    * 24.0
@@ -207,6 +220,7 @@ def get_hours_by_project(conn: sqlite3.Connection,
             "name": r["name"],
             "client": r["client"],
             "color": r["color"],
+            "billable": bool(r["billable"]),
             "hours": round(r["hours"], 2) if r["hours"] else 0,
         }
         for r in rows

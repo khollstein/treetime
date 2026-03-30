@@ -1,6 +1,6 @@
 """Database schema creation and migrations."""
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS activities (
@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS activities (
     process     TEXT NOT NULL,
     title       TEXT NOT NULL,
     idle        INTEGER NOT NULL DEFAULT 0,
-    duration_s  INTEGER NOT NULL DEFAULT 5
+    duration_s  INTEGER NOT NULL DEFAULT 5,
+    offline     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_activities_ts ON activities(timestamp);
 
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS projects (
     client      TEXT NOT NULL DEFAULT '',
     color       TEXT NOT NULL DEFAULT '#4A90D9',
     keywords    TEXT NOT NULL DEFAULT '',
+    billable    INTEGER NOT NULL DEFAULT 1,
     archived    INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL
 );
@@ -48,6 +50,7 @@ DEFAULT_SETTINGS = {
     "idle_threshold_s": "300",
     "theme": "dark",
     "capture_titles": "full",  # "full" or "process_only"
+    "offline_welcome_threshold_s": "300",
 }
 
 
@@ -81,3 +84,16 @@ def _run_migrations(conn, current_version: int):
         except Exception:
             pass  # Column already exists
         conn.execute("UPDATE schema_version SET version = 2")
+
+    if current_version < 3:
+        # Add offline column to activities
+        try:
+            conn.execute("ALTER TABLE activities ADD COLUMN offline INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        # Add billable column to projects
+        try:
+            conn.execute("ALTER TABLE projects ADD COLUMN billable INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass
+        conn.execute("UPDATE schema_version SET version = 3")

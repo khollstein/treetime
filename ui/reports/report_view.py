@@ -66,8 +66,8 @@ class ReportView(QWidget):
 
         # Summary table
         self._table = QTableWidget()
-        self._table.setColumnCount(3)
-        self._table.setHorizontalHeaderLabels(["Project", "Client", "Hours"])
+        self._table.setColumnCount(4)
+        self._table.setHorizontalHeaderLabels(["Project", "Client", "Billable", "Hours"])
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
@@ -113,9 +113,16 @@ class ReportView(QWidget):
 
         self._table.setRowCount(len(self._report_data))
         total_hours = 0
+        billable_hours = 0
+        non_billable_hours = 0
 
         for row_idx, row in enumerate(self._report_data):
             total_hours += row["hours"]
+            is_billable = row.get("billable", True)
+            if is_billable:
+                billable_hours += row["hours"]
+            else:
+                non_billable_hours += row["hours"]
 
             name_item = QTableWidgetItem(row["name"])
             name_item.setBackground(QColor(row["color"]))
@@ -123,11 +130,20 @@ class ReportView(QWidget):
             self._table.setItem(row_idx, 0, name_item)
             self._table.setItem(row_idx, 1, QTableWidgetItem(row["client"]))
 
+            billable_item = QTableWidgetItem("\u2713 Yes" if is_billable else "\u2014 No")
+            billable_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(row_idx, 2, billable_item)
+
             hours_item = QTableWidgetItem(f"{row['hours']:.2f}")
             hours_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self._table.setItem(row_idx, 2, hours_item)
+            self._table.setItem(row_idx, 3, hours_item)
 
-        self._totals_label.setText(f"Total: {total_hours:.1f} hours")
+        parts = [f"Total: {total_hours:.1f}h"]
+        if billable_hours > 0:
+            parts.append(f"Billable: {billable_hours:.1f}h")
+        if non_billable_hours > 0:
+            parts.append(f"Non-billable: {non_billable_hours:.1f}h")
+        self._totals_label.setText("  |  ".join(parts))
 
     def _export_csv(self):
         if not self._report_data:

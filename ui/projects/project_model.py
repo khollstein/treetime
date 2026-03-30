@@ -9,7 +9,7 @@ from database import queries
 from database.models import Project
 
 
-COLUMNS = ["Name", "Client", "Color", "Keywords", "Status"]
+COLUMNS = ["Name", "Client", "Color", "Keywords", "Billable", "Status"]
 
 
 class ProjectTableModel(QAbstractTableModel):
@@ -52,6 +52,8 @@ class ProjectTableModel(QAbstractTableModel):
             if col == 3:
                 return p.keywords
             if col == 4:
+                return "\u2713" if p.billable else "\u2014"
+            if col == 5:
                 return "Archived" if p.archived else "Active"
 
         if role == Qt.ItemDataRole.BackgroundRole and col == 2:
@@ -59,6 +61,9 @@ class ProjectTableModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.ForegroundRole and col == 2:
             return QColor("white")
+
+        if role == Qt.ItemDataRole.TextAlignmentRole and col == 4:
+            return Qt.AlignmentFlag.AlignCenter
 
         return None
 

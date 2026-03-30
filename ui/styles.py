@@ -10,6 +10,7 @@ PROCESS_COLORS = [
 ]
 
 IDLE_COLOR = "#ADB5BD"
+OFFLINE_COLOR = "#6C757D"
 
 
 def color_for_process(process_name: str) -> str:

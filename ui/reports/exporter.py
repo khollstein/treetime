@@ -13,16 +13,23 @@ def export_csv(filepath: str, report_data: list[dict],
             f"Time Report: {start_date.isoformat()} to {end_date.isoformat()}"
         ])
         writer.writerow([])
-        writer.writerow(["Project", "Client", "Hours"])
+        writer.writerow(["Project", "Client", "Billable", "Hours"])
 
         total_hours = 0
+        billable_hours = 0
         for row in report_data:
             total_hours += row["hours"]
+            is_billable = row.get("billable", True)
+            if is_billable:
+                billable_hours += row["hours"]
             writer.writerow([
                 row["name"],
                 row["client"],
+                "Yes" if is_billable else "No",
                 f"{row['hours']:.2f}",
             ])
 
         writer.writerow([])
-        writer.writerow(["TOTAL", "", f"{total_hours:.2f}"])
+        writer.writerow(["TOTAL", "", "", f"{total_hours:.2f}"])
+        writer.writerow(["BILLABLE", "", "", f"{billable_hours:.2f}"])
+        writer.writerow(["NON-BILLABLE", "", "", f"{total_hours - billable_hours:.2f}"])

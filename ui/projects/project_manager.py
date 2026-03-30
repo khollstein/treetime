@@ -4,7 +4,7 @@ import sqlite3
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableView, QPushButton,
-    QDialog, QFormLayout, QLineEdit, QColorDialog,
+    QDialog, QFormLayout, QLineEdit, QColorDialog, QCheckBox,
     QHeaderView, QAbstractItemView, QLabel,
 )
 from PySide6.QtGui import QColor
@@ -18,7 +18,7 @@ class ProjectEditDialog(QDialog):
     """Add/edit a project."""
 
     def __init__(self, name="", client="", color="#4A90D9",
-                 keywords="", parent=None):
+                 keywords="", billable=True, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Project")
         self.setMinimumWidth(400)
@@ -52,6 +52,13 @@ class ProjectEditDialog(QDialog):
         layout.addRow("Keywords:", self._keywords_edit)
         layout.addRow("", keywords_help)
 
+        self._billable_check = QCheckBox("Billable")
+        self._billable_check.setChecked(billable)
+        billable_help = QLabel("Uncheck for non-billable tasks (admin, travel, internal)")
+        billable_help.setStyleSheet("font-size: 10px; color: #888; margin-top: -4px;")
+        layout.addRow("", self._billable_check)
+        layout.addRow("", billable_help)
+
         btn_layout = QHBoxLayout()
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
@@ -81,6 +88,7 @@ class ProjectEditDialog(QDialog):
             "client": self._client_edit.text().strip(),
             "color": self._color,
             "keywords": self._keywords_edit.text().strip(),
+            "billable": self._billable_check.isChecked(),
         }
 
 
@@ -124,6 +132,7 @@ class ProjectManager(QWidget):
         self._table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.Stretch
         )
+        self._table.setColumnWidth(4, 70)  # Billable column
         self._table.verticalHeader().setVisible(False)
         self._table.doubleClicked.connect(self._edit_project)
         layout.addWidget(self._table)
@@ -134,7 +143,7 @@ class ProjectManager(QWidget):
             data = dlg.result_data()
             queries.insert_project(
                 self._conn, data["name"], data["client"],
-                data["color"], data["keywords"],
+                data["color"], data["keywords"], data["billable"],
             )
             self._model.refresh()
 
@@ -145,14 +154,14 @@ class ProjectManager(QWidget):
         p = self._model.get_project(idx.row())
         dlg = ProjectEditDialog(
             name=p.name, client=p.client, color=p.color,
-            keywords=p.keywords,
+            keywords=p.keywords, billable=p.billable,
             parent=self,
         )
         if dlg.exec():
             data = dlg.result_data()
             queries.update_project(
                 self._conn, p.id, data["name"], data["client"],
-                data["color"], data["keywords"],
+                data["color"], data["keywords"], data["billable"],
             )
             self._model.refresh()
 
