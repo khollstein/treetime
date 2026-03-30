@@ -26,7 +26,8 @@ class MainWindow(QMainWindow):
         self._conn = conn
         self._engine = engine
 
-        self.setWindowTitle("Treetime")
+        from config import APP_VERSION
+        self.setWindowTitle(f"Treetime v{APP_VERSION}")
         self.resize(1100, 700)
 
         from ui.tray import create_app_icon
