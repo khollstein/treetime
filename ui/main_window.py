@@ -5,6 +5,7 @@ from datetime import datetime
 
 from PySide6.QtWidgets import (
     QMainWindow, QTabWidget, QStatusBar, QLabel, QPushButton,
+    QMessageBox, QInputDialog,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon
@@ -15,6 +16,7 @@ from ui.timeline.timeline_widget import TimelineWidget
 from ui.projects.project_manager import ProjectManager
 from ui.reports.report_view import ReportView
 from ui.styles import get_theme, set_theme, build_stylesheet, THEMES
+from integrations.fieldflow import sync_projects
 
 
 class MainWindow(QMainWindow):
@@ -73,6 +75,12 @@ class MainWindow(QMainWindow):
         self._activity_count_label.setStyleSheet(f"color: {get_theme().text_muted};")
         status_bar.addPermanentWidget(self._activity_count_label)
 
+        # FieldFlow sync button
+        self._sync_btn = QPushButton("⟳ Sync FieldFlow")
+        self._sync_btn.setToolTip("Sync projects from FieldFlow")
+        self._sync_btn.clicked.connect(self._sync_fieldflow)
+        status_bar.addPermanentWidget(self._sync_btn)
+
         # Privacy toggle button
         self._privacy_btn = QPushButton()
         self._privacy_btn.setFixedSize(32, 32)
@@ -121,6 +129,48 @@ class MainWindow(QMainWindow):
         new_mode = "process_only" if current == "full" else "full"
         set_setting(self._conn, "capture_titles", new_mode)
         self._update_privacy_button()
+
+    def _sync_fieldflow(self):
+        """Sync projects from the FieldFlow endpoint."""
+        api_key = get_setting(self._conn, "fieldflow_api_key", "")
+        if not api_key:
+            api_key, ok = QInputDialog.getText(
+                self, "FieldFlow API Key",
+                "Enter your FieldFlow API key:",
+            )
+            if not ok or not api_key.strip():
+                return
+            api_key = api_key.strip()
+            set_setting(self._conn, "fieldflow_api_key", api_key)
+
+        self._sync_btn.setEnabled(False)
+        self._sync_btn.setText("Syncing...")
+        try:
+            result = sync_projects(self._conn, api_key)
+        except Exception as exc:
+            QMessageBox.warning(self, "Sync Error", f"Unexpected error:\n{exc}")
+            return
+        finally:
+            self._sync_btn.setEnabled(True)
+            self._sync_btn.setText("⟳ Sync FieldFlow")
+
+        if result["errors"]:
+            error_text = "\n".join(result["errors"])
+            QMessageBox.warning(
+                self, "FieldFlow Sync",
+                f"Created {result['created']} projects, "
+                f"Updated {result['updated']} projects.\n\n"
+                f"Errors:\n{error_text}",
+            )
+        else:
+            QMessageBox.information(
+                self, "FieldFlow Sync",
+                f"Created {result['created']} projects, "
+                f"Updated {result['updated']} projects.",
+            )
+
+        # Refresh the projects tab
+        self._projects._model.refresh()
 
     def _toggle_theme(self):
         t = get_theme()
