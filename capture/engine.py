@@ -1,7 +1,7 @@
 """Capture engine — polls active window on a QTimer and writes to SQLite."""
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -15,6 +15,10 @@ class CaptureEngine(QObject):
 
     activity_recorded = Signal(str, str, bool)  # process, title, idle
     offline_ended = Signal(object, object)  # start_dt, end_dt
+
+    # If a poll fires and the gap since last poll exceeds this multiplier
+    # times the poll interval, we assume the computer was asleep/locked.
+    GAP_MULTIPLIER = 6  # e.g. 5s poll * 6 = 30s gap means offline
 
     def __init__(self, conn: sqlite3.Connection,
                  poll_interval_ms: int = 5000,
@@ -30,13 +34,11 @@ class CaptureEngine(QObject):
         self._last_process = None
         self._last_title = None
         self._last_idle = None
+        self._last_poll_time = None
         self._paused = False
-        # Offline state
-        self._is_offline = False
-        self._offline_start = None
-        self._offline_activity_id = None
 
     def start(self):
+        self._last_poll_time = datetime.now()
         self._timer.start(self._poll_interval_ms)
 
     def stop(self):
@@ -44,64 +46,64 @@ class CaptureEngine(QObject):
 
     def set_paused(self, paused: bool):
         self._paused = paused
+        if not paused:
+            # Reset gap detection so returning from pause doesn't look offline
+            self._last_poll_time = datetime.now()
 
     @property
     def is_paused(self) -> bool:
         return self._paused
 
-    def on_session_locked(self):
-        """Called when the Windows session is locked."""
-        if self._is_offline:
-            return
-        self._is_offline = True
-        self._offline_start = datetime.now()
-        # Reset deduplication state
-        self._last_activity_id = None
-        self._last_process = None
-        self._last_title = None
-        self._last_idle = None
-        # Insert an offline activity row
-        self._offline_activity_id = queries.insert_activity(
-            self._conn,
-            timestamp=self._offline_start,
-            process="(offline)",
-            title="Screen locked",
-            idle=True,
-            duration_s=0,
-            offline=True,
-        )
-
-    def on_session_unlocked(self):
-        """Called when the Windows session is unlocked."""
-        if not self._is_offline:
-            return
-        end_time = datetime.now()
-        start_time = self._offline_start or end_time
-        duration = int((end_time - start_time).total_seconds())
-
-        # Update the offline activity row with the actual duration
-        if self._offline_activity_id and duration > 0:
-            queries.set_activity_duration(
-                self._conn, self._offline_activity_id, duration
-            )
-
-        self._is_offline = False
-        self._offline_activity_id = None
-
-        # Emit signal so app can show Welcome Back dialog
-        self.offline_ended.emit(start_time, end_time)
-
     def _poll(self):
-        if self._paused or self._is_offline:
+        if self._paused:
+            self._last_poll_time = datetime.now()
             return
 
+        now = datetime.now()
+        poll_seconds = self._poll_interval_ms // 1000
+
+        # ── Gap detection (sleep/lock/hibernate) ──────────────────
+        if self._last_poll_time is not None:
+            gap = (now - self._last_poll_time).total_seconds()
+            gap_threshold = poll_seconds * self.GAP_MULTIPLIER
+
+            if gap > gap_threshold and gap > 60:
+                # Computer was offline — insert an offline activity block
+                offline_start = self._last_poll_time
+                offline_duration = int(gap)
+
+                queries.insert_activity(
+                    self._conn,
+                    timestamp=offline_start,
+                    process="(offline)",
+                    title="Computer was locked / asleep",
+                    idle=True,
+                    duration_s=offline_duration,
+                    offline=True,
+                )
+
+                # Reset deduplication
+                self._last_activity_id = None
+                self._last_process = None
+                self._last_title = None
+                self._last_idle = None
+
+                # Emit so app can show Welcome Back dialog
+                offline_end = now
+                self.offline_ended.emit(offline_start, offline_end)
+
+                self._last_poll_time = now
+                return
+
+        self._last_poll_time = now
+
+        # ── Normal polling ────────────────────────────────────────
         process, title = get_active_window_info()
         idle = get_idle_duration_s() >= self._idle_threshold_s
 
         # Privacy mode: mask window titles if configured
         if queries.get_setting(self._conn, "capture_titles", "full") == "process_only":
             title = process.replace(".exe", "")
-        poll_seconds = self._poll_interval_ms // 1000
 
         # Deduplication: if same window and same idle state, extend duration
         if (self._last_activity_id is not None
@@ -114,7 +116,7 @@ class CaptureEngine(QObject):
         else:
             self._last_activity_id = queries.insert_activity(
                 self._conn,
-                timestamp=datetime.now(),
+                timestamp=now,
                 process=process,
                 title=title,
                 idle=idle,
