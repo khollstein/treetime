@@ -30,8 +30,10 @@ def _get_time_slots(model, zoom_minutes):
         else:
             return []
     else:
-        start_hour = max(0, segments[0].start.hour)
-        end_hour = min(24, segments[-1].end.hour + 1)
+        earliest = min(seg.start for seg in segments)
+        latest = max(seg.end for seg in segments)
+        start_hour = max(0, earliest.hour)
+        end_hour = min(24, latest.hour + 1)
         if day == date.today():
             end_hour = max(end_hour, min(24, datetime.now().hour + 1))
 
