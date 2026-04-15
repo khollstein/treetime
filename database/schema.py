@@ -2,48 +2,44 @@
 
 SCHEMA_VERSION = 3
 
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS activities (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   TEXT NOT NULL,
-    process     TEXT NOT NULL,
-    title       TEXT NOT NULL,
-    idle        INTEGER NOT NULL DEFAULT 0,
-    duration_s  INTEGER NOT NULL DEFAULT 5,
-    offline     INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_activities_ts ON activities(timestamp);
-
-CREATE TABLE IF NOT EXISTS projects (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    client      TEXT NOT NULL DEFAULT '',
-    color       TEXT NOT NULL DEFAULT '#4A90D9',
-    keywords    TEXT NOT NULL DEFAULT '',
-    billable    INTEGER NOT NULL DEFAULT 1,
-    archived    INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS time_entries (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id  INTEGER NOT NULL REFERENCES projects(id),
-    start_time  TEXT NOT NULL,
-    end_time    TEXT NOT NULL,
-    note        TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_time_entries_range ON time_entries(start_time, end_time);
-
-CREATE TABLE IF NOT EXISTS app_settings (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER NOT NULL
-);
-"""
+_TABLE_STATEMENTS = [
+    """CREATE TABLE IF NOT EXISTS activities (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp   TEXT NOT NULL,
+        process     TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        idle        INTEGER NOT NULL DEFAULT 0,
+        duration_s  INTEGER NOT NULL DEFAULT 5,
+        offline     INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_activities_ts ON activities(timestamp)",
+    """CREATE TABLE IF NOT EXISTS projects (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT NOT NULL,
+        client      TEXT NOT NULL DEFAULT '',
+        color       TEXT NOT NULL DEFAULT '#4A90D9',
+        keywords    TEXT NOT NULL DEFAULT '',
+        billable    INTEGER NOT NULL DEFAULT 1,
+        archived    INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS time_entries (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL REFERENCES projects(id),
+        start_time  TEXT NOT NULL,
+        end_time    TEXT NOT NULL,
+        note        TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_time_entries_range ON time_entries(start_time, end_time)",
+    """CREATE TABLE IF NOT EXISTS app_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER NOT NULL
+    )""",
+]
 
 DEFAULT_SETTINGS = {
     "poll_interval_ms": "5000",
@@ -56,7 +52,9 @@ DEFAULT_SETTINGS = {
 
 def init_schema(conn):
     """Create tables and seed defaults if needed."""
-    conn.executescript(SCHEMA_SQL)
+    for stmt in _TABLE_STATEMENTS:
+        conn.execute(stmt)
+    conn.commit()
 
     # Check if schema_version has a row
     row = conn.execute("SELECT version FROM schema_version").fetchone()
@@ -78,20 +76,17 @@ def init_schema(conn):
 def _run_migrations(conn, current_version: int):
     """Run incremental migrations."""
     if current_version < 2:
-        # Add keywords column to projects
         try:
             conn.execute("ALTER TABLE projects ADD COLUMN keywords TEXT NOT NULL DEFAULT ''")
         except Exception:
-            pass  # Column already exists
+            pass
         conn.execute("UPDATE schema_version SET version = 2")
 
     if current_version < 3:
-        # Add offline column to activities
         try:
             conn.execute("ALTER TABLE activities ADD COLUMN offline INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
-        # Add billable column to projects
         try:
             conn.execute("ALTER TABLE projects ADD COLUMN billable INTEGER NOT NULL DEFAULT 1")
         except Exception:

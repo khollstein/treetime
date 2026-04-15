@@ -30,8 +30,15 @@ def _get_time_slots(model, zoom_minutes):
         else:
             return []
     else:
-        earliest = min(seg.start for seg in segments)
-        latest = max(seg.end for seg in segments)
+        # Clamp ends to the viewing day so overnight-spanning segments
+        # (e.g. an idle block left running into the next day) don't break
+        # the range calculation.
+        day_end = datetime(day.year, day.month, day.day, 23, 59, 59)
+        day_start = datetime(day.year, day.month, day.day, 0, 0, 0)
+        starts = [max(seg.start, day_start) for seg in segments]
+        ends = [min(seg.end, day_end) for seg in segments]
+        earliest = min(starts)
+        latest = max(ends)
         start_hour = max(0, earliest.hour)
         end_hour = min(24, latest.hour + 1)
         if day == date.today():
