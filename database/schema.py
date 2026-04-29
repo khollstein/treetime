@@ -46,7 +46,6 @@ DEFAULT_SETTINGS = {
     "idle_threshold_s": "300",
     "theme": "dark",
     "capture_titles": "full",  # "full" or "process_only"
-    "offline_welcome_threshold_s": "300",
 }
 
 
