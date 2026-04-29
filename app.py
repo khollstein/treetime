@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
 from database.connection import get_connection
-from database.queries import get_setting, insert_time_entry
+from database.queries import get_setting
 from capture.engine import CaptureEngine
 from ui.tray import TrayIcon, create_app_icon
 from ui.main_window import MainWindow
@@ -59,20 +59,12 @@ class TreetimeApp:
         self.main_window.activateWindow()
 
     def _on_offline_ended(self, start_dt, end_dt):
-        """Show Welcome Back dialog if offline duration exceeds threshold."""
-        threshold = int(get_setting(self.conn, "offline_welcome_threshold_s", "300"))
-        duration = (end_dt - start_dt).total_seconds()
-        if duration < threshold:
-            return
+        """Refresh the timeline so the just-recorded offline block shows up.
 
-        from ui.welcome_back_dialog import WelcomeBackDialog
-        self._show_main_window()
-        dlg = WelcomeBackDialog(self.conn, start_dt, end_dt, parent=self.main_window)
-        if dlg.exec():
-            project_id, note = dlg.result_data()
-            if project_id:
-                insert_time_entry(self.conn, project_id, start_dt, end_dt, note)
-        # Refresh timeline regardless
+        The offline period is already written to the activities table by the
+        capture engine; the user can assign it to a project later from the
+        timeline.
+        """
         self.main_window.reload_timeline()
 
     def _quit(self):
