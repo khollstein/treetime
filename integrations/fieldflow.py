@@ -1,11 +1,28 @@
 """FieldFlow integration — sync projects from the Treetime cloud API."""
 
 import json
+import re
 import sqlite3
 import urllib.request
 import urllib.error
 import urllib.parse
 from typing import Optional
+
+# Matches raw UUID row-keys that should never appear in a human-readable name.
+# Covers: full UUIDs, UUIDs without dashes, and 8-char UUID fragments.
+_ROW_KEY_RE = re.compile(
+    r'^('
+    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+    r'|[0-9a-f]{32}'
+    r'|[0-9a-f]{8}'
+    r')$',
+    re.IGNORECASE,
+)
+
+
+def _is_row_key(s: str) -> bool:
+    """Return True if *s* looks like a database row-ID, not a project code."""
+    return bool(s) and bool(_ROW_KEY_RE.match(s))
 
 from database.queries import get_all_projects, insert_project, update_project
 
@@ -116,11 +133,17 @@ def sync_projects(
         title = rp.get("title") or ""
         client_name = rp.get("client_name") or ""
         client_company = rp.get("client_company") or ""
-        keyword = rp.get("keyword") or project_number
-
-        # Compose a display name: "ARB-001 — Tree Assessment - Smith Residence"
-        display_name = f"{project_number} — {title}" if project_number and title else (title or project_number)
         client_display = client_company or client_name or ""  # never None
+
+        # If project_number is a raw UUID row-key, don't show it in the name.
+        # Human-readable codes (e.g. "ARB-001", "P-2678") pass through fine.
+        if project_number and not _is_row_key(project_number):
+            display_name = f"{project_number} — {title}" if title else project_number
+            keyword = rp.get("keyword") or project_number
+        else:
+            # No readable code — use title only; fall back to UUID if truly empty
+            display_name = title or project_number
+            keyword = rp.get("keyword") or ""  # don't keyword-match on a UUID
 
         try:
             match = _find_match(local_projects, project_number)

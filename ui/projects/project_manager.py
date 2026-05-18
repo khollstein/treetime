@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QAbstractItemView, QLabel,
 )
 from PySide6.QtGui import QColor
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSortFilterProxyModel
 
 from database import queries
 from ui.projects.project_model import ProjectTableModel
@@ -118,13 +118,26 @@ class ProjectManager(QWidget):
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
-        # Table
+        # Search bar
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search projects by name, client or keyword...")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.textChanged.connect(self._on_search)
+        layout.addWidget(self._search_edit)
+
+        # Table + proxy (for live filtering)
         self._model = ProjectTableModel(conn)
+        self._proxy = QSortFilterProxyModel(self)
+        self._proxy.setSourceModel(self._model)
+        self._proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._proxy.setFilterKeyColumn(-1)  # search across ALL columns
+
         self._table = QTableView()
-        self._table.setModel(self._model)
+        self._table.setModel(self._proxy)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.setAlternatingRowColors(True)
+        self._table.setSortingEnabled(True)
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
@@ -137,6 +150,17 @@ class ProjectManager(QWidget):
         self._table.doubleClicked.connect(self._edit_project)
         layout.addWidget(self._table)
 
+    def _on_search(self, text: str):
+        self._proxy.setFilterFixedString(text)
+
+    def _selected_project(self):
+        """Return the Project for the currently selected table row, or None."""
+        idx = self._table.currentIndex()
+        if not idx.isValid():
+            return None
+        source_idx = self._proxy.mapToSource(idx)
+        return self._model.get_project(source_idx.row())
+
     def _add_project(self):
         dlg = ProjectEditDialog(parent=self)
         if dlg.exec():
@@ -148,10 +172,9 @@ class ProjectManager(QWidget):
             self._model.refresh()
 
     def _edit_project(self):
-        idx = self._table.currentIndex()
-        if not idx.isValid():
+        p = self._selected_project()
+        if p is None:
             return
-        p = self._model.get_project(idx.row())
         dlg = ProjectEditDialog(
             name=p.name, client=p.client, color=p.color,
             keywords=p.keywords, billable=p.billable,
@@ -166,9 +189,8 @@ class ProjectManager(QWidget):
             self._model.refresh()
 
     def _toggle_archive(self):
-        idx = self._table.currentIndex()
-        if not idx.isValid():
+        p = self._selected_project()
+        if p is None:
             return
-        p = self._model.get_project(idx.row())
         queries.archive_project(self._conn, p.id, not p.archived)
         self._model.refresh()
