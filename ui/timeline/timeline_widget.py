@@ -29,93 +29,31 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}m"
 
 
-class OfflineBanner(QFrame):
-    """A non-modal prompt to assign an unassigned offline period."""
-
-    assign_clicked = Signal(int)   # activity id
-    dismiss_clicked = Signal(int)  # activity id
-
-    def __init__(self, activity, parent=None):
-        super().__init__(parent)
-        self._activity = activity
-
-        t = get_theme()
-        self.setObjectName("offlineBanner")
-        self.setStyleSheet(
-            f"#offlineBanner {{"
-            f"  background-color: {t.warning if hasattr(t, 'warning') else '#FFF4E5'};"
-            f"  border: 1px solid #E0A800;"
-            f"  border-radius: 6px;"
-            f"  padding: 8px;"
-            f"}}"
-            f"#offlineBanner QLabel {{ color: #5B4500; }}"
-        )
-
-        start_dt = activity.timestamp
-        end_dt = activity.timestamp + timedelta(seconds=activity.duration_s)
-        dur_text = _format_duration(activity.duration_s)
-        time_range = f"{start_dt.strftime('%H:%M')} — {end_dt.strftime('%H:%M')}"
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 6, 6, 6)
-        lay.setSpacing(8)
-
-        icon = QLabel("⏸")  # ⏸
-        icon.setStyleSheet("font-size: 16px; color: #B07000;")
-        lay.addWidget(icon)
-
-        text = QLabel(
-            f"<b>{dur_text} offline</b> "
-            f"<span style='color:#7A5C00'>({time_range})</span> "
-            f"&nbsp;— assign to a project?"
-        )
-        lay.addWidget(text)
-        lay.addStretch()
-
-        assign_btn = QPushButton("Assign")
-        assign_btn.setObjectName("primary")
-        assign_btn.setFixedHeight(28)
-        assign_btn.clicked.connect(lambda: self.assign_clicked.emit(activity.id))
-        lay.addWidget(assign_btn)
-
-        dismiss_btn = QPushButton("×")  # ×
-        dismiss_btn.setToolTip("Dismiss (won't show again)")
-        dismiss_btn.setFixedSize(28, 28)
-        dismiss_btn.clicked.connect(lambda: self.dismiss_clicked.emit(activity.id))
-        lay.addWidget(dismiss_btn)
-
-
 def _get_time_slots(model, zoom_minutes):
+    """Return time slots for the visible day.
+
+    Always covers 6 AM → midnight so the user can scroll the full
+    working day regardless of where activities happened.  The range
+    is expanded leftward if any activity started before 6 AM.
+    """
     day = model.current_day or date.today()
     segments = model.activity_segments
 
-    if not segments:
-        now = datetime.now()
-        if day == date.today():
-            start_hour = max(0, now.hour - 1)
-            end_hour = min(24, now.hour + 2)
-        else:
-            return []
-    else:
-        # Clamp ends to the viewing day so overnight-spanning segments
-        # (e.g. an idle block left running into the next day) don't break
-        # the range calculation.
-        day_end = datetime(day.year, day.month, day.day, 23, 59, 59)
+    # Default: 6 AM start, midnight end (covers any work day)
+    start_hour = 6
+    end_hour = 24  # slot generation stops at 23:59:59
+
+    # If any activity started before 6 AM, expand leftward
+    if segments:
         day_start = datetime(day.year, day.month, day.day, 0, 0, 0)
-        starts = [max(seg.start, day_start) for seg in segments]
-        ends = [min(seg.end, day_end) for seg in segments]
-        earliest = min(starts)
-        latest = max(ends)
-        start_hour = max(0, earliest.hour)
-        end_hour = min(24, latest.hour + 1)
-        if day == date.today():
-            end_hour = max(end_hour, min(24, datetime.now().hour + 1))
+        for seg in segments:
+            clamped = max(seg.start, day_start)
+            if clamped.hour < start_hour:
+                start_hour = clamped.hour
 
     slots = []
     current = datetime(day.year, day.month, day.day, start_hour)
-    end_dt = datetime(day.year, day.month, day.day, min(23, end_hour), 59, 59)
-    if end_hour >= 24:
-        end_dt = datetime(day.year, day.month, day.day, 23, 59, 59)
+    end_dt = datetime(day.year, day.month, day.day, 23, 59, 59)
 
     while current <= end_dt:
         slots.append(current)
@@ -646,13 +584,6 @@ class TimelineWidget(QWidget):
         tb_layout.addWidget(self._zoom_combo)
         layout.addWidget(toolbar)
 
-        # Offline banner container (populated by _refresh_offline_banners)
-        self._banner_container = QWidget()
-        self._banner_layout = QVBoxLayout(self._banner_container)
-        self._banner_layout.setContentsMargins(12, 0, 12, 6)
-        self._banner_layout.setSpacing(4)
-        layout.addWidget(self._banner_container)
-
         # Headers
         headers = QWidget()
         hdr_layout = QHBoxLayout(headers)
@@ -728,73 +659,10 @@ class TimelineWidget(QWidget):
         self._time_entries.updateGeometry()
         self._time_entries.update()
         self._projects_sidebar.update()
-        self._refresh_offline_banners()
 
     def reload(self):
         self._model.reload()
         self._refresh()
-
-    def _refresh_offline_banners(self):
-        """Rebuild the list of offline-banner widgets at the top of the timeline."""
-        # Clear existing
-        while self._banner_layout.count() > 0:
-            item = self._banner_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-
-        from database.queries import get_unassigned_offline_blocks
-        day = self._model.current_day or date.today()
-        try:
-            blocks = get_unassigned_offline_blocks(self._conn, day)
-        except Exception:
-            blocks = []
-
-        # Only show banners for non-trivial offline blocks (>= 5 minutes)
-        for act in blocks:
-            if act.duration_s < 300:
-                continue
-            banner = OfflineBanner(act, parent=self._banner_container)
-            banner.assign_clicked.connect(self._on_assign_offline)
-            banner.dismiss_clicked.connect(self._on_dismiss_offline)
-            self._banner_layout.addWidget(banner)
-
-    def _on_assign_offline(self, activity_id: int):
-        """User clicked 'Assign' on an offline banner — open WelcomeBackDialog."""
-        from database import queries
-        # Find the activity in the model (it was loaded for the current day)
-        target = None
-        for seg in self._model.activity_segments:
-            # ActivitySegment doesn't carry id — re-query the activity
-            pass
-        # Re-query by id to be safe
-        row = self._conn.execute(
-            "SELECT * FROM activities WHERE id = ?", (activity_id,)
-        ).fetchone()
-        if not row:
-            return
-        from database.models import Activity
-        act = Activity.from_row(row)
-        start = act.timestamp
-        end = act.timestamp + timedelta(seconds=act.duration_s)
-
-        from ui.welcome_back_dialog import WelcomeBackDialog
-        dlg = WelcomeBackDialog(self._conn, start, end, parent=self)
-        if dlg.exec():
-            project_id, note = dlg.result_data()
-            if project_id:
-                queries.insert_time_entry(self._conn, project_id, start, end, note)
-                # Once assigned, the block is covered by a time_entry so
-                # the banner won't reappear; no need to mark dismissed.
-        self.reload()
-
-    def _on_dismiss_offline(self, activity_id: int):
-        from database.queries import dismiss_activity
-        try:
-            dismiss_activity(self._conn, activity_id)
-        except Exception:
-            pass
-        self._refresh_offline_banners()
 
     def _on_date_changed(self, qdate):
         self._load_date(date(qdate.year(), qdate.month(), qdate.day()))
@@ -874,8 +742,8 @@ class TimelineWidget(QWidget):
                 _flush_block()
                 continue
 
-            seg_end = seg.timestamp + timedelta(seconds=seg.duration_s)
-            if _is_covered(seg.timestamp, seg_end):
+            seg_end = seg.end  # ActivitySegment already has .start and .end
+            if _is_covered(seg.start, seg_end):
                 _flush_block()
                 continue
 
@@ -897,7 +765,7 @@ class TimelineWidget(QWidget):
                 else:
                     _flush_block()
                     current_match = match
-                    block_start = seg.timestamp
+                    block_start = seg.start
                     block_end = seg_end
             else:
                 _flush_block()

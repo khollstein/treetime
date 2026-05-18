@@ -53,6 +53,17 @@ class CaptureEngine(QObject):
             # Reset gap detection so returning from pause doesn't look offline
             self._last_poll_time = datetime.now()
 
+    def set_idle_threshold(self, idle_s: int):
+        """Update idle threshold without restarting the engine."""
+        self._idle_threshold_s = max(10, idle_s)
+
+    def set_poll_interval(self, poll_ms: int):
+        """Update poll interval without restarting the engine."""
+        poll_ms = max(1000, poll_ms)
+        self._poll_interval_ms = poll_ms
+        if self._timer.isActive():
+            self._timer.start(poll_ms)  # restart with new interval
+
     @property
     def is_paused(self) -> bool:
         return self._paused

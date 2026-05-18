@@ -17,6 +17,7 @@ from ui.projects.project_manager import ProjectManager
 from ui.reports.report_view import ReportView
 from ui.styles import get_theme, set_theme, build_stylesheet, THEMES
 from ui.fieldflow_settings import FieldFlowSettingsDialog
+from ui.app_settings_dialog import AppSettingsDialog
 from integrations.fieldflow import sync_projects, DEFAULT_URL
 
 
@@ -108,6 +109,13 @@ class MainWindow(QMainWindow):
         self._update_theme_button()
         status_bar.addPermanentWidget(self._theme_btn)
 
+        # App settings button
+        self._app_settings_btn = QPushButton("⚙")
+        self._app_settings_btn.setFixedSize(32, 32)
+        self._app_settings_btn.setToolTip("App settings (idle threshold, poll interval)")
+        self._app_settings_btn.clicked.connect(self._open_app_settings)
+        status_bar.addPermanentWidget(self._app_settings_btn)
+
         # Blink timer
         self._blink_on = True
         self._blink_timer = QTimer(self)
@@ -198,6 +206,22 @@ class MainWindow(QMainWindow):
         dlg.exec()
         # Re-evaluate auto-sync timer in case the user changed the interval
         self._restart_auto_sync_timer()
+
+    def _open_app_settings(self):
+        dlg = AppSettingsDialog(self._conn, parent=self)
+        dlg.settings_changed.connect(self._apply_engine_settings)
+        dlg.exec()
+
+    def _apply_engine_settings(self):
+        """Push updated idle/poll settings into the running capture engine."""
+        from database.queries import get_setting
+        try:
+            idle_s = int(get_setting(self._conn, "idle_threshold_s", "300"))
+            poll_ms = int(get_setting(self._conn, "poll_interval_ms", "5000"))
+            self._engine.set_idle_threshold(idle_s)
+            self._engine.set_poll_interval(poll_ms)
+        except Exception:
+            pass  # Settings persist to DB; engine picks them up on next restart
 
     def _restart_auto_sync_timer(self):
         hours = 0

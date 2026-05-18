@@ -113,21 +113,35 @@ class AssignmentDialog(QDialog):
             btn_layout.addStretch()
             layout.addLayout(btn_layout)
 
-        # Project dropdown
+        # Project dropdown + new project button
         combo_label = QLabel("Or select project:")
         combo_label.setStyleSheet(f"color: {t.text_muted}; font-size: 11px; margin-top: 8px;")
         layout.addWidget(combo_label)
+
+        combo_row = QHBoxLayout()
+        combo_row.setSpacing(6)
         self._project_combo = QComboBox()
-        all_projects = queries.get_all_projects(conn)
+        self._project_combo.setSizePolicy(
+            self._project_combo.sizePolicy().horizontalPolicy(),
+            self._project_combo.sizePolicy().verticalPolicy(),
+        )
+        self._all_projects = queries.get_all_projects(conn)
         selected_index = 0
-        for i, p in enumerate(all_projects):
+        for i, p in enumerate(self._all_projects):
             display = f"{p.name} ({p.client})" if p.client else p.name
             self._project_combo.addItem(display, p.id)
             if auto_match and p.id == auto_match.id:
                 selected_index = i
         if auto_match:
             self._project_combo.setCurrentIndex(selected_index)
-        layout.addWidget(self._project_combo)
+        combo_row.addWidget(self._project_combo, 1)
+
+        new_proj_btn = QPushButton("+ New")
+        new_proj_btn.setToolTip("Create a new project")
+        new_proj_btn.setFixedWidth(68)
+        new_proj_btn.clicked.connect(self._on_new_project)
+        combo_row.addWidget(new_proj_btn)
+        layout.addLayout(combo_row)
 
         # Note
         note_label = QLabel("Note (optional):")
@@ -153,6 +167,33 @@ class AssignmentDialog(QDialog):
         self._selected_project_id = project_id
         self._note = self._note_edit.text()
         self.accept()
+
+    def _on_new_project(self):
+        """Open ProjectEditDialog, create the project, and select it in combo."""
+        from ui.projects.project_manager import ProjectEditDialog
+        dlg = ProjectEditDialog(parent=self)
+        if not dlg.exec():
+            return
+        data = dlg.result_data()
+        name = data["name"]
+        client = data["client"]
+        color = data["color"]
+        keywords = data["keywords"]
+        billable = data["billable"]
+        if not name.strip():
+            return
+        new_id = queries.insert_project(
+            self._conn,
+            name=name.strip(),
+            client=client.strip(),
+            color=color,
+            keywords=keywords.strip(),
+            billable=billable,
+        )
+        # Refresh combo
+        display = f"{name} ({client})" if client else name
+        self._project_combo.addItem(display, new_id)
+        self._project_combo.setCurrentIndex(self._project_combo.count() - 1)
 
     def _on_assign(self):
         idx = self._project_combo.currentIndex()
