@@ -5,7 +5,7 @@ from datetime import datetime
 
 from PySide6.QtWidgets import (
     QMainWindow, QTabWidget, QStatusBar, QLabel, QPushButton,
-    QMessageBox, QInputDialog,
+    QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon
@@ -16,7 +16,8 @@ from ui.timeline.timeline_widget import TimelineWidget
 from ui.projects.project_manager import ProjectManager
 from ui.reports.report_view import ReportView
 from ui.styles import get_theme, set_theme, build_stylesheet, THEMES
-from integrations.fieldflow import sync_projects
+from ui.fieldflow_settings import FieldFlowSettingsDialog
+from integrations.fieldflow import sync_projects, DEFAULT_URL
 
 
 class MainWindow(QMainWindow):
@@ -75,11 +76,22 @@ class MainWindow(QMainWindow):
         self._activity_count_label.setStyleSheet(f"color: {get_theme().text_muted};")
         status_bar.addPermanentWidget(self._activity_count_label)
 
-        # FieldFlow sync button
+        # FieldFlow sync button + settings button (split control)
         self._sync_btn = QPushButton("⟳ Sync FieldFlow")
-        self._sync_btn.setToolTip("Sync projects from FieldFlow")
+        self._sync_btn.setToolTip("Sync projects from FieldFlow now")
         self._sync_btn.clicked.connect(self._sync_fieldflow)
         status_bar.addPermanentWidget(self._sync_btn)
+
+        self._ff_settings_btn = QPushButton("⚙")
+        self._ff_settings_btn.setFixedSize(28, 28)
+        self._ff_settings_btn.setToolTip("FieldFlow settings")
+        self._ff_settings_btn.clicked.connect(self._open_fieldflow_settings)
+        status_bar.addPermanentWidget(self._ff_settings_btn)
+
+        # Auto-sync timer (fires every N hours if configured)
+        self._auto_sync_timer = QTimer(self)
+        self._auto_sync_timer.timeout.connect(self._maybe_auto_sync)
+        self._restart_auto_sync_timer()
 
         # Privacy toggle button
         self._privacy_btn = QPushButton()
@@ -131,28 +143,36 @@ class MainWindow(QMainWindow):
         self._update_privacy_button()
 
     def _sync_fieldflow(self):
-        """Sync projects from the FieldFlow endpoint."""
+        """Sync projects from the FieldFlow endpoint (toolbar shortcut)."""
         api_key = get_setting(self._conn, "fieldflow_api_key", "")
         if not api_key:
-            api_key, ok = QInputDialog.getText(
-                self, "FieldFlow API Key",
-                "Enter your FieldFlow API key:",
-            )
-            if not ok or not api_key.strip():
-                return
-            api_key = api_key.strip()
-            set_setting(self._conn, "fieldflow_api_key", api_key)
+            # No key configured — open settings instead so the user can
+            # paste both the key and the URL.
+            self._open_fieldflow_settings()
+            return
+
+        endpoint = get_setting(self._conn, "fieldflow_endpoint_url", DEFAULT_URL) or DEFAULT_URL
+        workspace = get_setting(self._conn, "fieldflow_workspace_id", "") or None
 
         self._sync_btn.setEnabled(False)
         self._sync_btn.setText("Syncing...")
         try:
-            result = sync_projects(self._conn, api_key)
+            result = sync_projects(
+                self._conn,
+                api_key=api_key,
+                endpoint_url=endpoint,
+                workspace_id=workspace,
+            )
         except Exception as exc:
             QMessageBox.warning(self, "Sync Error", f"Unexpected error:\n{exc}")
-            return
-        finally:
             self._sync_btn.setEnabled(True)
             self._sync_btn.setText("⟳ Sync FieldFlow")
+            return
+        self._sync_btn.setEnabled(True)
+        self._sync_btn.setText("⟳ Sync FieldFlow")
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        set_setting(self._conn, "fieldflow_last_sync", now_str)
 
         if result["errors"]:
             error_text = "\n".join(result["errors"])
@@ -171,6 +191,46 @@ class MainWindow(QMainWindow):
 
         # Refresh the projects tab
         self._projects._model.refresh()
+
+    def _open_fieldflow_settings(self):
+        dlg = FieldFlowSettingsDialog(self._conn, parent=self)
+        dlg.sync_completed.connect(self._projects._model.refresh)
+        dlg.exec()
+        # Re-evaluate auto-sync timer in case the user changed the interval
+        self._restart_auto_sync_timer()
+
+    def _restart_auto_sync_timer(self):
+        hours = 0
+        try:
+            hours = int(get_setting(self._conn, "fieldflow_auto_sync_hours", "0") or "0")
+        except ValueError:
+            hours = 0
+        self._auto_sync_timer.stop()
+        if hours > 0:
+            # Convert hours to ms, but cap at QTimer's int limit defensively
+            interval_ms = min(hours * 3600 * 1000, 2_000_000_000)
+            self._auto_sync_timer.start(interval_ms)
+
+    def _maybe_auto_sync(self):
+        """Fired by _auto_sync_timer. Run sync silently if a key is set."""
+        api_key = get_setting(self._conn, "fieldflow_api_key", "")
+        if not api_key:
+            return
+        endpoint = get_setting(self._conn, "fieldflow_endpoint_url", DEFAULT_URL) or DEFAULT_URL
+        workspace = get_setting(self._conn, "fieldflow_workspace_id", "") or None
+        try:
+            sync_projects(
+                self._conn,
+                api_key=api_key,
+                endpoint_url=endpoint,
+                workspace_id=workspace,
+            )
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            set_setting(self._conn, "fieldflow_last_sync", now_str)
+            self._projects._model.refresh()
+        except Exception:
+            # Auto-sync failures stay quiet; user can hit Sync Now to see errors
+            pass
 
     def _toggle_theme(self):
         t = get_theme()

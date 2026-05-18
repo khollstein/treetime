@@ -45,6 +45,8 @@ class TreetimeApp:
         self.tray.quit_requested.connect(self._quit)
         self.tray.pause_toggled.connect(self.engine.set_paused)
         self.engine.activity_recorded.connect(self.tray.update_tracking_info)
+        # When an offline period ends, just refresh the timeline so the
+        # banner appears. NO modal pop-up — the banner is the prompt.
         self.engine.offline_ended.connect(self._on_offline_ended)
 
     def run(self) -> int:
@@ -59,13 +61,16 @@ class TreetimeApp:
         self.main_window.activateWindow()
 
     def _on_offline_ended(self, start_dt, end_dt):
-        """Refresh the timeline so the just-recorded offline block shows up.
+        """An offline period just ended — refresh timeline so the banner
+        appears. No modal pop-up; the user assigns it on their own time.
 
-        The offline period is already written to the activities table by the
-        capture engine; the user can assign it to a project later from the
-        timeline.
+        The offline period is already written to the activities table by
+        the capture engine; the banner offers a click-to-assign UI.
         """
-        self.main_window.reload_timeline()
+        try:
+            self.main_window.reload_timeline()
+        except Exception:
+            pass
 
     def _quit(self):
         self.engine.stop()

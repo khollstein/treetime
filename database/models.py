@@ -13,6 +13,7 @@ class Activity:
     idle: bool
     duration_s: int
     offline: bool = False
+    dismissed: bool = False
 
     @classmethod
     def from_row(cls, row) -> "Activity":
@@ -20,6 +21,10 @@ class Activity:
             offline = bool(row["offline"])
         except (IndexError, KeyError):
             offline = False
+        try:
+            dismissed = bool(row["dismissed"])
+        except (IndexError, KeyError):
+            dismissed = False
         return cls(
             id=row["id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -28,6 +33,7 @@ class Activity:
             idle=bool(row["idle"]),
             duration_s=row["duration_s"],
             offline=offline,
+            dismissed=dismissed,
         )
 
 

@@ -60,6 +60,58 @@ def get_activities_for_day(conn: sqlite3.Connection, day: date) -> list[Activity
     return [Activity.from_row(r) for r in rows]
 
 
+def get_unassigned_offline_blocks(conn: sqlite3.Connection,
+                                  day: date) -> list[Activity]:
+    """Return offline activity blocks that are not dismissed and not
+    covered by any existing time_entry (so the user can still assign them)."""
+    start = datetime(day.year, day.month, day.day, 0, 0, 0).isoformat()
+    end = datetime(day.year, day.month, day.day, 23, 59, 59).isoformat()
+    # Backwards compat: older DBs may not have `dismissed` yet.
+    try:
+        rows = conn.execute(
+            """
+            SELECT a.* FROM activities a
+            WHERE a.timestamp BETWEEN ? AND ?
+              AND a.offline = 1
+              AND a.dismissed = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM time_entries t
+                  WHERE t.start_time <= a.timestamp
+                    AND t.end_time   >= datetime(a.timestamp,
+                                                '+' || a.duration_s || ' seconds')
+              )
+            ORDER BY a.timestamp
+            """,
+            (start, end),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = conn.execute(
+            """
+            SELECT a.* FROM activities a
+            WHERE a.timestamp BETWEEN ? AND ?
+              AND a.offline = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM time_entries t
+                  WHERE t.start_time <= a.timestamp
+                    AND t.end_time   >= datetime(a.timestamp,
+                                                '+' || a.duration_s || ' seconds')
+              )
+            ORDER BY a.timestamp
+            """,
+            (start, end),
+        ).fetchall()
+    return [Activity.from_row(r) for r in rows]
+
+
+def dismiss_activity(conn: sqlite3.Connection, activity_id: int):
+    """Mark an offline activity as dismissed so its banner stops appearing."""
+    conn.execute(
+        "UPDATE activities SET dismissed = 1 WHERE id = ?",
+        (activity_id,),
+    )
+    conn.commit()
+
+
 # ── Projects ────────────────────────────────────────────────────────
 
 def insert_project(conn: sqlite3.Connection, name: str, client: str = "",

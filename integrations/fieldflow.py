@@ -34,6 +34,39 @@ def _find_match(projects, project_number: str):
     return None
 
 
+def test_connection(api_key: str,
+                    endpoint_url: str = DEFAULT_URL,
+                    workspace_id: Optional[str] = None) -> tuple[bool, str]:
+    """Quick GET against the endpoint to verify the key/URL.
+
+    Returns ``(ok, message)``.
+    """
+    params: dict[str, str] = {"active_only": "true"}
+    if workspace_id:
+        params["workspace_id"] = workspace_id
+    url = f"{endpoint_url}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("x-api-key", api_key)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        count = data.get("count", len(data.get("projects", [])))
+        return True, f"Success — endpoint returned {count} project(s)."
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        return False, f"HTTP {exc.code} {exc.reason}\n{body}".strip()
+    except urllib.error.URLError as exc:
+        return False, f"Connection error: {exc.reason}"
+    except json.JSONDecodeError as exc:
+        return False, f"Bad JSON response: {exc}"
+    except Exception as exc:
+        return False, f"Unexpected error: {exc}"
+
+
 def sync_projects(
     conn: sqlite3.Connection,
     api_key: str,

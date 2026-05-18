@@ -1,6 +1,6 @@
 """Database schema creation and migrations."""
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _TABLE_STATEMENTS = [
     """CREATE TABLE IF NOT EXISTS activities (
@@ -10,7 +10,8 @@ _TABLE_STATEMENTS = [
         title       TEXT NOT NULL,
         idle        INTEGER NOT NULL DEFAULT 0,
         duration_s  INTEGER NOT NULL DEFAULT 5,
-        offline     INTEGER NOT NULL DEFAULT 0
+        offline     INTEGER NOT NULL DEFAULT 0,
+        dismissed   INTEGER NOT NULL DEFAULT 0
     )""",
     "CREATE INDEX IF NOT EXISTS idx_activities_ts ON activities(timestamp)",
     """CREATE TABLE IF NOT EXISTS projects (
@@ -91,3 +92,10 @@ def _run_migrations(conn, current_version: int):
         except Exception:
             pass
         conn.execute("UPDATE schema_version SET version = 3")
+
+    if current_version < 4:
+        try:
+            conn.execute("ALTER TABLE activities ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        conn.execute("UPDATE schema_version SET version = 4")

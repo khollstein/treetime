@@ -1,6 +1,8 @@
 """Capture engine — polls active window on a QTimer and writes to SQLite."""
 
 import sqlite3
+import sys
+import traceback
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -29,13 +31,14 @@ class CaptureEngine(QObject):
         self._poll_interval_ms = poll_interval_ms
         self._idle_threshold_s = idle_threshold_s
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self._poll)
+        self._timer.timeout.connect(self._safe_poll)
         self._last_activity_id = None
         self._last_process = None
         self._last_title = None
         self._last_idle = None
         self._last_poll_time = None
         self._paused = False
+        self._consecutive_errors = 0
 
     def start(self):
         self._last_poll_time = datetime.now()
@@ -53,6 +56,28 @@ class CaptureEngine(QObject):
     @property
     def is_paused(self) -> bool:
         return self._paused
+
+    def _safe_poll(self):
+        """Wraps _poll() so a single bad poll never breaks the timer."""
+        try:
+            self._poll()
+            self._consecutive_errors = 0
+        except Exception as exc:
+            self._consecutive_errors += 1
+            try:
+                sys.stderr.write(
+                    f"[Treetime] _poll error ({self._consecutive_errors}): {exc}\n"
+                )
+                traceback.print_exc(file=sys.stderr)
+            except Exception:
+                pass
+            # Recover: reset dedup state so next poll starts fresh.
+            self._last_activity_id = None
+            self._last_process = None
+            self._last_title = None
+            self._last_idle = None
+            # Keep _last_poll_time current so we don't falsely trip gap detection
+            self._last_poll_time = datetime.now()
 
     def _poll(self):
         if self._paused:
@@ -88,7 +113,7 @@ class CaptureEngine(QObject):
                 self._last_title = None
                 self._last_idle = None
 
-                # Emit so app can show Welcome Back dialog
+                # Emit so app can react (e.g. show a banner)
                 offline_end = now
                 self.offline_ended.emit(offline_start, offline_end)
 
