@@ -78,14 +78,13 @@ class MainWindow(QMainWindow):
         status_bar.addPermanentWidget(self._activity_count_label)
 
         # FieldFlow sync button + settings button (split control)
-        self._sync_btn = QPushButton("⟳ Sync FieldFlow")
+        self._sync_btn = QPushButton("Sync FieldFlow")
         self._sync_btn.setToolTip("Sync projects from FieldFlow now")
         self._sync_btn.clicked.connect(self._sync_fieldflow)
         status_bar.addPermanentWidget(self._sync_btn)
 
-        self._ff_settings_btn = QPushButton("⚙")
-        self._ff_settings_btn.setFixedSize(28, 28)
-        self._ff_settings_btn.setToolTip("FieldFlow settings")
+        self._ff_settings_btn = QPushButton("FF Settings")
+        self._ff_settings_btn.setToolTip("FieldFlow connection settings")
         self._ff_settings_btn.clicked.connect(self._open_fieldflow_settings)
         status_bar.addPermanentWidget(self._ff_settings_btn)
 
@@ -94,25 +93,21 @@ class MainWindow(QMainWindow):
         self._auto_sync_timer.timeout.connect(self._maybe_auto_sync)
         self._restart_auto_sync_timer()
 
-        # Privacy toggle button
+        # Privacy toggle button — text changes to reflect current state
         self._privacy_btn = QPushButton()
-        self._privacy_btn.setFixedSize(32, 32)
         self._privacy_btn.clicked.connect(self._toggle_privacy)
         self._update_privacy_button()
         status_bar.addPermanentWidget(self._privacy_btn)
 
-        # Theme toggle button
-        self._theme_btn = QPushButton("☀")
-        self._theme_btn.setFixedSize(32, 32)
-        self._theme_btn.setToolTip("Toggle dark/light mode")
+        # Theme toggle button — text changes to reflect current state
+        self._theme_btn = QPushButton()
         self._theme_btn.clicked.connect(self._toggle_theme)
         self._update_theme_button()
         status_bar.addPermanentWidget(self._theme_btn)
 
         # App settings button
-        self._app_settings_btn = QPushButton("⚙")
-        self._app_settings_btn.setFixedSize(32, 32)
-        self._app_settings_btn.setToolTip("App settings (idle threshold, poll interval)")
+        self._app_settings_btn = QPushButton("Settings")
+        self._app_settings_btn.setToolTip("Idle threshold, poll interval and other capture settings")
         self._app_settings_btn.clicked.connect(self._open_app_settings)
         status_bar.addPermanentWidget(self._app_settings_btn)
 
@@ -129,20 +124,20 @@ class MainWindow(QMainWindow):
     def _update_theme_button(self):
         t = get_theme()
         if t.name == "dark":
-            self._theme_btn.setText("☀")
+            self._theme_btn.setText("Light Mode")
             self._theme_btn.setToolTip("Switch to light mode")
         else:
-            self._theme_btn.setText("🌙")
+            self._theme_btn.setText("Dark Mode")
             self._theme_btn.setToolTip("Switch to dark mode")
 
     def _update_privacy_button(self):
         mode = get_setting(self._conn, "capture_titles", "full")
         if mode == "full":
-            self._privacy_btn.setText("\U0001F441")  # eye
-            self._privacy_btn.setToolTip("Window titles visible — click to mask")
+            self._privacy_btn.setText("Titles: On")
+            self._privacy_btn.setToolTip("Window titles are being recorded — click to hide them")
         else:
-            self._privacy_btn.setText("\U0001F512")  # lock
-            self._privacy_btn.setToolTip("Window titles masked — click to show")
+            self._privacy_btn.setText("Titles: Off")
+            self._privacy_btn.setToolTip("Window titles are hidden — click to record them")
 
     def _toggle_privacy(self):
         current = get_setting(self._conn, "capture_titles", "full")
@@ -174,10 +169,10 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Sync Error", f"Unexpected error:\n{exc}")
             self._sync_btn.setEnabled(True)
-            self._sync_btn.setText("⟳ Sync FieldFlow")
+            self._sync_btn.setText("Sync FieldFlow")
             return
         self._sync_btn.setEnabled(True)
-        self._sync_btn.setText("⟳ Sync FieldFlow")
+        self._sync_btn.setText("Sync FieldFlow")
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         set_setting(self._conn, "fieldflow_last_sync", now_str)
