@@ -112,15 +112,15 @@ def sync_projects(
     local_projects = get_all_projects(conn, include_archived=True)
 
     for rp in remote_projects:
-        project_number = rp.get("project_number", "")
-        title = rp.get("title", "")
-        client_name = rp.get("client_name", "")
-        client_company = rp.get("client_company", "")
-        keyword = rp.get("keyword", project_number)
+        project_number = rp.get("project_number") or ""
+        title = rp.get("title") or ""
+        client_name = rp.get("client_name") or ""
+        client_company = rp.get("client_company") or ""
+        keyword = rp.get("keyword") or project_number
 
         # Compose a display name: "ARB-001 — Tree Assessment - Smith Residence"
         display_name = f"{project_number} — {title}" if project_number and title else (title or project_number)
-        client_display = client_company or client_name
+        client_display = client_company or client_name or ""  # never None
 
         try:
             match = _find_match(local_projects, project_number)
