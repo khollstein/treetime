@@ -5,7 +5,7 @@ from datetime import datetime
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QLineEdit, QFrame,
+    QComboBox, QCompleter, QLineEdit, QFrame,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -121,10 +121,17 @@ class AssignmentDialog(QDialog):
         combo_row = QHBoxLayout()
         combo_row.setSpacing(6)
         self._project_combo = QComboBox()
-        self._project_combo.setSizePolicy(
-            self._project_combo.sizePolicy().horizontalPolicy(),
-            self._project_combo.sizePolicy().verticalPolicy(),
-        )
+        self._project_combo.setEditable(True)
+        self._project_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._project_combo.lineEdit().setPlaceholderText("Type to search projects...")
+        self._project_combo.lineEdit().setClearButtonEnabled(True)
+
+        # Substring (contains) matching so typing "elm" finds "42 Elm St"
+        completer = self._project_combo.completer()
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
         self._all_projects = queries.get_all_projects(conn)
         selected_index = 0
         for i, p in enumerate(self._all_projects):
@@ -197,8 +204,16 @@ class AssignmentDialog(QDialog):
 
     def _on_assign(self):
         idx = self._project_combo.currentIndex()
+        if idx < 0:
+            # Editable combo: user may have typed without selecting from popup.
+            # Try to resolve what they typed to an exact item.
+            typed = self._project_combo.currentText().strip().lower()
+            for i in range(self._project_combo.count()):
+                if self._project_combo.itemText(i).lower() == typed:
+                    idx = i
+                    break
         if idx >= 0:
-            self._selected_project_id = self._project_combo.currentData()
+            self._selected_project_id = self._project_combo.itemData(idx)
             self._note = self._note_edit.text()
             self.accept()
 
