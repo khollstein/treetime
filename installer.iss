@@ -4,7 +4,7 @@
 
 [Setup]
 AppName=Treetime
-AppVersion=0.3.4
+AppVersion=0.3.5
 AppPublisher=Canopy Consulting
 DefaultDirName={autopf}\Treetime
 DefaultGroupName=Treetime
