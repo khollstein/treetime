@@ -279,6 +279,60 @@ def get_hours_by_project(conn: sqlite3.Connection,
     ]
 
 
+def get_timesheet_entries(conn: sqlite3.Connection,
+                          start_date: date, end_date: date,
+                          project_id: int = None) -> list[dict]:
+    """Return individual time entries within the range, joined with project info.
+
+    Each row: date, day_name, project_id, name, client, color, billable,
+               start_time, end_time, hours, note.
+    Optionally filtered to a single project.
+    """
+    start = datetime(start_date.year, start_date.month, start_date.day).isoformat()
+    end = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59).isoformat()
+
+    project_filter = "AND te.project_id = ?" if project_id else ""
+    params = [end, start, end, start]
+    if project_id:
+        params.append(project_id)
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            date(te.start_time)        AS entry_date,
+            strftime('%A', te.start_time) AS day_name,
+            p.id                       AS project_id,
+            p.name, p.client, p.color, p.billable,
+            te.start_time, te.end_time, te.note,
+            (julianday(MIN(te.end_time, ?)) - julianday(MAX(te.start_time, ?)))
+                * 24.0                 AS hours
+        FROM time_entries te
+        JOIN projects p ON p.id = te.project_id
+        WHERE te.start_time <= ? AND te.end_time >= ?
+        {project_filter}
+        ORDER BY te.start_time
+        """,
+        params,
+    ).fetchall()
+
+    return [
+        {
+            "entry_date": r["entry_date"],
+            "day_name":   r["day_name"],
+            "project_id": r["project_id"],
+            "name":       r["name"],
+            "client":     r["client"] or "",
+            "color":      r["color"],
+            "billable":   bool(r["billable"]),
+            "start_time": r["start_time"],
+            "end_time":   r["end_time"],
+            "hours":      round(max(r["hours"] or 0, 0), 2),
+            "note":       r["note"] or "",
+        }
+        for r in rows
+    ]
+
+
 # ── Settings ────────────────────────────────────────────────────────
 
 def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
