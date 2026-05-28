@@ -31,3 +31,6 @@ Thumbs.db
 # GitHub CLI binary (local only, not committed)
 gh.exe
 gh-cli/
+
+# GitHub token (secret — never commit this)
+GITHUB_TOKEN
