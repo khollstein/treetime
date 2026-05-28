@@ -27,3 +27,7 @@ treetime.ico
 # OS
 Thumbs.db
 .DS_Store
+
+# GitHub CLI binary (local only, not committed)
+gh.exe
+gh-cli/

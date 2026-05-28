@@ -32,16 +32,16 @@ INSTALLER_ISS = ROOT / "installer.iss"
 # gh CLI — prefers system PATH, falls back to portable install location
 def _find_gh() -> str:
     import shutil
+    # First: check next to this script (most reliable across user contexts)
+    local = ROOT / "gh.exe"
+    if local.exists():
+        return str(local)
     on_path = shutil.which("gh")
     if on_path:
         return on_path
-    portable = Path(r"C:\Users\User\AppData\Local\gh-cli\bin\gh.exe")
-    if portable.exists():
-        return str(portable)
     sys.exit(
-        "GitHub CLI (gh) not found.\n"
-        r"It should be at C:\Users\User\AppData\Local\gh-cli\bin\gh.exe"
-        "\nIf missing, re-run the install step."
+        "gh.exe not found in the project folder or PATH.\n"
+        "Make sure gh.exe is in the same folder as release.py."
     )
 
 GH = _find_gh()
