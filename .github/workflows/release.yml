@@ -9,11 +9,6 @@ on:
   push:
     tags:
       - "v*"
-    # Temporary: build the v0.3.9 release from this branch. Remove after
-    # the release is published — tags and manual dispatch are the normal
-    # triggers.
-    branches:
-      - "claude/treetime-logging-accuracy-eo1d9b"
   workflow_dispatch:
 
 permissions:
