@@ -36,7 +36,7 @@ class AssignmentDialog(QDialog):
 
         # Time range header
         duration = end - start
-        minutes = int(duration.total_seconds() / 60)
+        minutes = round(duration.total_seconds() / 60)
         hours, mins = divmod(minutes, 60)
         time_str = f"{hours}h {mins}m" if hours else f"{mins}m"
 
@@ -51,7 +51,7 @@ class AssignmentDialog(QDialog):
         if activities:
             summary_parts = []
             for proc, secs in sorted(activities.items(), key=lambda x: -x[1]):
-                summary_parts.append(f"{proc}: {int(secs/60)}m")
+                summary_parts.append(f"{proc}: {max(1, round(secs / 60))}m")
             summary_label = QLabel("  |  ".join(summary_parts[:5]))
             summary_label.setStyleSheet(f"color: {t.text_muted}; font-size: 11px;")
             summary_label.setWordWrap(True)

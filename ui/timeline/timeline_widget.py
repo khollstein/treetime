@@ -19,9 +19,10 @@ SLOT_HEIGHT = 48
 
 
 def _format_duration(seconds: float) -> str:
-    seconds = int(seconds)
-    hours, rem = divmod(seconds, 3600)
-    minutes = rem // 60
+    total_minutes = round(seconds / 60)
+    if total_minutes == 0:
+        return "<1m" if seconds > 0 else "0m"
+    hours, minutes = divmod(total_minutes, 60)
     if hours > 0 and minutes > 0:
         return f"{hours}h {minutes}m"
     if hours > 0:
@@ -396,8 +397,13 @@ class TimeEntriesColumn(QWidget):
                              seg.project.name)
 
             dur = seg.end - seg.start
-            mins = int(dur.total_seconds() / 60)
-            dur_text = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins} min"
+            mins = round(dur.total_seconds() / 60)
+            if mins >= 60:
+                dur_text = f"{mins // 60}h {mins % 60}m"
+            elif mins >= 1:
+                dur_text = f"{mins} min"
+            else:
+                dur_text = "<1 min"
             painter.setFont(QFont("Segoe UI", 8))
             painter.drawText(QRectF(x + w - 62, y1 + 2, 55, h - 4),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
@@ -475,11 +481,14 @@ class ProjectsSidebar(QWidget):
 
         def _draw_project_row(p, y_pos):
             mins = project_times.get(p.id, 0)
+            total_min = round(mins)
             h_text = ""
-            if mins >= 60:
-                h_text = f"{int(mins // 60)}h {int(mins % 60)}m"
+            if total_min >= 60:
+                h_text = f"{total_min // 60}h {total_min % 60}m"
+            elif total_min >= 1:
+                h_text = f"{total_min} min"
             elif mins > 0:
-                h_text = f"{int(mins)} min"
+                h_text = "<1 min"
 
             painter.setBrush(QColor(p.color))
             painter.setPen(Qt.PenStyle.NoPen)
@@ -713,41 +722,17 @@ class TimelineWidget(QWidget):
                 "These will be matched against your window titles.")
             return
 
-        # Find unassigned segments and match them
-        assigned_count = 0
-        # Group consecutive segments with the same match into blocks
-        current_match = None
-        block_start = None
-        block_end = None
+        # Tolerances: brief interruptions (a quick window switch, a short
+        # unmatched activity) shouldn't split a work block, and fragments
+        # too short to be meaningful shouldn't become entries at all.
+        GAP_TOLERANCE_S = 180
+        MIN_ENTRY_S = 60
 
-        def _is_covered(seg_start, seg_end):
-            """Check if a segment is already covered by an existing time entry."""
-            mid = seg_start + (seg_end - seg_start) / 2
-            for entry in existing_entries:
-                if entry.start_time <= mid <= entry.end_time:
-                    return True
-            return False
-
-        def _flush_block():
-            nonlocal assigned_count, block_start, block_end, current_match
-            if current_match and block_start and block_end:
-                insert_time_entry(self._conn, current_match.id, block_start, block_end)
-                assigned_count += 1
-            current_match = None
-            block_start = None
-            block_end = None
-
+        # 1. Collect matched intervals in chronological order
+        matched = []  # (start, end, project)
         for seg in segments:
             if seg.idle or seg.offline:
-                _flush_block()
                 continue
-
-            seg_end = seg.end  # ActivitySegment already has .start and .end
-            if _is_covered(seg.start, seg_end):
-                _flush_block()
-                continue
-
-            # Check keyword match
             search = f"{seg.process} {seg.title}".lower()
             match = None
             best_score = 0
@@ -757,20 +742,43 @@ class TimelineWidget(QWidget):
                     if score > best_score:
                         best_score = score
                         match = proj
-
             if match:
-                if match == current_match and block_end:
-                    # Extend current block
-                    block_end = seg_end
-                else:
-                    _flush_block()
-                    current_match = match
-                    block_start = seg.start
-                    block_end = seg_end
-            else:
-                _flush_block()
+                matched.append((seg.start, seg.end, match))
 
-        _flush_block()
+        # 2. Merge consecutive same-project intervals separated by short gaps
+        blocks = []  # [start, end, project]
+        for start, end, proj in matched:
+            if (blocks
+                    and blocks[-1][2].id == proj.id
+                    and (start - blocks[-1][1]).total_seconds() <= GAP_TOLERANCE_S):
+                blocks[-1][1] = max(blocks[-1][1], end)
+            else:
+                blocks.append([start, end, proj])
+
+        # 3. Subtract existing time entries so re-running auto-assign never
+        #    creates overlapping (double-counted) entries
+        def _subtract(start, end):
+            pieces = [(start, end)]
+            for entry in existing_entries:
+                remaining = []
+                for s, e in pieces:
+                    if entry.end_time <= s or entry.start_time >= e:
+                        remaining.append((s, e))
+                        continue
+                    if s < entry.start_time:
+                        remaining.append((s, entry.start_time))
+                    if entry.end_time < e:
+                        remaining.append((entry.end_time, e))
+                pieces = remaining
+            return pieces
+
+        # 4. Create entries for pieces long enough to matter
+        assigned_count = 0
+        for start, end, proj in blocks:
+            for s, e in _subtract(start, end):
+                if (e - s).total_seconds() >= MIN_ENTRY_S:
+                    insert_time_entry(self._conn, proj.id, s, e)
+                    assigned_count += 1
 
         # Reload
         self._model.reload()
