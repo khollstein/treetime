@@ -588,6 +588,13 @@ class TimelineWidget(QWidget):
         tb_layout.addWidget(self._today_btn)
         tb_layout.addSpacing(12)
         tb_layout.addWidget(self._auto_btn)
+
+        # Reconciliation summary: captured vs assigned vs unassigned
+        self._summary_label = QLabel()
+        self._summary_label.setTextFormat(Qt.TextFormat.RichText)
+        tb_layout.addSpacing(16)
+        tb_layout.addWidget(self._summary_label)
+
         tb_layout.addStretch()
         tb_layout.addWidget(zoom_label)
         tb_layout.addWidget(self._zoom_combo)
@@ -668,6 +675,21 @@ class TimelineWidget(QWidget):
         self._time_entries.updateGeometry()
         self._time_entries.update()
         self._projects_sidebar.update()
+        self._update_summary()
+
+    def _update_summary(self):
+        t = get_theme()
+        s = self._model.day_summary()
+        # Only flag unassigned time once there's enough to matter
+        unassigned_color = t.danger if s["unassigned_s"] >= 900 else t.text_muted
+        self._summary_label.setText(
+            f"<span style='color:{t.text_muted}'>"
+            f"Active {_format_duration(s['active_s'])}"
+            f" &nbsp;•&nbsp; Assigned {_format_duration(s['assigned_s'])}"
+            f" &nbsp;•&nbsp; </span>"
+            f"<span style='color:{unassigned_color}'>"
+            f"Unassigned {_format_duration(s['unassigned_s'])}</span>"
+        )
 
     def reload(self):
         self._model.reload()

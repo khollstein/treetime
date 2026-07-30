@@ -40,6 +40,23 @@ def _next_color(existing_count: int) -> str:
     return _AUTO_COLORS[existing_count % len(_AUTO_COLORS)]
 
 
+def _merge_keywords(existing: str, *new_keywords: str) -> str:
+    """Merge keywords into an existing comma-separated list.
+
+    User-added keywords are preserved; new ones are appended with
+    case-insensitive de-duplication.
+    """
+    result = [k.strip() for k in (existing or "").split(",") if k.strip()]
+    seen = {k.lower() for k in result}
+    for kw_list in new_keywords:
+        for kw in (kw_list or "").split(","):
+            kw = kw.strip()
+            if kw and kw.lower() not in seen:
+                result.append(kw)
+                seen.add(kw.lower())
+    return ", ".join(result)
+
+
 def _find_match(projects, project_number: str):
     """Return a local Project whose name or keywords contain *project_number*."""
     pn_lower = project_number.lower()
@@ -139,7 +156,9 @@ def sync_projects(
         # Human-readable codes (e.g. "ARB-001", "P-2678") pass through fine.
         if project_number and not _is_row_key(project_number):
             display_name = f"{project_number} — {title}" if title else project_number
-            keyword = rp.get("keyword") or project_number
+            # Always seed the project number as a keyword so window titles
+            # containing it (e.g. "2026-03_E-002514_...") auto-match.
+            keyword = _merge_keywords(rp.get("keyword") or "", project_number)
         else:
             # No readable code — use title only; fall back to UUID if truly empty
             display_name = title or project_number
@@ -148,14 +167,15 @@ def sync_projects(
         try:
             match = _find_match(local_projects, project_number)
             if match:
-                # Update existing — preserve the user's chosen colour
+                # Update existing — preserve the user's chosen colour and
+                # any keywords they added by hand
                 update_project(
                     conn,
                     match.id,
                     name=display_name,
                     client=client_display,
                     color=match.color,
-                    keywords=keyword,
+                    keywords=_merge_keywords(match.keywords, keyword),
                     billable=match.billable,
                 )
                 updated += 1
