@@ -52,6 +52,12 @@ class CaptureEngine(QObject):
         if not paused:
             # Reset gap detection so returning from pause doesn't look offline
             self._last_poll_time = datetime.now()
+            # Start a fresh segment — the pre-pause segment must not be
+            # extended across the paused period.
+            self._last_activity_id = None
+            self._last_process = None
+            self._last_title = None
+            self._last_idle = None
 
     def set_idle_threshold(self, idle_s: int):
         """Update idle threshold without restarting the engine."""
@@ -96,11 +102,18 @@ class CaptureEngine(QObject):
             return
 
         now = datetime.now()
-        poll_seconds = self._poll_interval_ms // 1000
+        poll_seconds = max(1, round(self._poll_interval_ms / 1000))
+
+        # Real time since the previous poll. We credit this instead of a
+        # fixed poll_seconds so timer jitter and slow polls don't leak
+        # unrecorded seconds between segments.
+        elapsed_s = None
+        if self._last_poll_time is not None:
+            elapsed_s = (now - self._last_poll_time).total_seconds()
 
         # ── Gap detection (sleep/lock/hibernate) ──────────────────
-        if self._last_poll_time is not None:
-            gap = (now - self._last_poll_time).total_seconds()
+        if elapsed_s is not None:
+            gap = elapsed_s
             gap_threshold = poll_seconds * self.GAP_MULTIPLIER
 
             if gap > gap_threshold and gap > 60:
@@ -141,22 +154,32 @@ class CaptureEngine(QObject):
         if queries.get_setting(self._conn, "capture_titles", "full") == "process_only":
             title = process.replace(".exe", "")
 
+        # Seconds to credit for the interval since the previous poll.
+        credit_s = int(round(elapsed_s)) if elapsed_s is not None else 0
+
         # Deduplication: if same window and same idle state, extend duration
         if (self._last_activity_id is not None
                 and process == self._last_process
                 and title == self._last_title
                 and idle == self._last_idle):
             queries.update_activity_duration(
-                self._conn, self._last_activity_id, poll_seconds
+                self._conn, self._last_activity_id,
+                credit_s if credit_s > 0 else poll_seconds,
             )
         else:
+            # Close out the previous segment up to now, so the hand-off
+            # between windows doesn't drop the last poll interval.
+            if self._last_activity_id is not None and credit_s > 0:
+                queries.update_activity_duration(
+                    self._conn, self._last_activity_id, credit_s
+                )
             self._last_activity_id = queries.insert_activity(
                 self._conn,
                 timestamp=now,
                 process=process,
                 title=title,
                 idle=idle,
-                duration_s=poll_seconds,
+                duration_s=0,
             )
             self._last_process = process
             self._last_title = title

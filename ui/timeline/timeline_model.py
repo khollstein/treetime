@@ -104,6 +104,45 @@ class TimelineModel:
     def invalidate_project_cache(self):
         self._projects_cache.clear()
 
+    def day_summary(self) -> dict[str, float]:
+        """Reconciliation totals for the loaded day, in seconds.
+
+        active_s     — captured non-idle, non-offline time
+        assigned_s   — time covered by entries (overlaps counted once)
+        unassigned_s — active time not covered by any entry
+        """
+        active = [[s.start, s.end] for s in self._activity_segments
+                  if not s.idle and not s.offline and s.end > s.start]
+        entries = [[s.start, s.end] for s in self._project_segments
+                   if s.end > s.start]
+
+        def _union(intervals):
+            merged = []
+            for start, end in sorted(intervals):
+                if merged and start <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], end)
+                else:
+                    merged.append([start, end])
+            return merged
+
+        active_u = _union(active)
+        entries_u = _union(entries)
+        active_s = sum((e - s).total_seconds() for s, e in active_u)
+        assigned_s = sum((e - s).total_seconds() for s, e in entries_u)
+
+        covered_s = 0.0
+        for s, e in active_u:
+            for es, ee in entries_u:
+                lo, hi = max(s, es), min(e, ee)
+                if lo < hi:
+                    covered_s += (hi - lo).total_seconds()
+
+        return {
+            "active_s": active_s,
+            "assigned_s": assigned_s,
+            "unassigned_s": max(0.0, active_s - covered_s),
+        }
+
     def get_activities_in_range(self, start: datetime, end: datetime) -> dict[str, float]:
         """Get process → total seconds within a time range (for selection summary)."""
         result: dict[str, float] = {}

@@ -1,0 +1,71 @@
+# Builds TreetimeSetup.exe on a Windows runner and publishes a GitHub
+# Release — the CI equivalent of release.py / build_and_release.bat.
+#
+# Triggers on any v* tag push, or manually via workflow_dispatch.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install "PySide6>=6.6" "pywin32>=306" "psutil>=5.9" "pyinstaller>=6.0"
+
+      - name: Read version from config.py
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(python -c "import re; print(re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"', open('config.py', encoding='utf-8').read()).group(1))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building Treetime v$VERSION"
+
+      - name: Generate icon
+        shell: bash
+        run: python generate_ico.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: pyinstaller --name Treetime --windowed --onedir --icon=treetime.ico -y main.py
+
+      - name: Install Inno Setup
+        shell: bash
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer
+        shell: bash
+        run: |
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" installer.iss
+          ls -la installer_output/TreetimeSetup.exe
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          NOTES=$'## Treetime '"$TAG"$'\n\n**Install:** Download `TreetimeSetup.exe` below and run it.\n\nYour existing data is preserved on upgrade.'
+          # Allow re-releasing the same version, matching release.py behavior
+          gh release delete "$TAG" -y || true
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Treetime $TAG" \
+            --notes "$NOTES" \
+            installer_output/TreetimeSetup.exe
