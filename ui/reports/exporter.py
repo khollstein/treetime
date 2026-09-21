@@ -80,3 +80,27 @@ def export_timesheet_csv(filepath: str, timesheet_data: list[dict],
         writer.writerow(["BILLABLE", "", "", "", "", "", "", f"{billable_hours:.2f}", ""])
         writer.writerow(["NON-BILLABLE", "", "", "", "", "", "",
                          f"{total_hours - billable_hours:.2f}", ""])
+
+
+def export_fieldflow_csv(filepath: str, payloads: list[dict]):
+    """Export time entries in FieldFlow's upload shape.
+
+    The fallback for when pushing isn't available: same fields, same matching
+    on the FieldFlow side. One row per time entry, no totals — this is a data
+    file, not a report.
+    """
+    columns = ["external_id", "project_number", "person_email",
+               "started_at", "minutes", "description", "billable"]
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        for payload in payloads:
+            writer.writerow([
+                payload.get("external_id", ""),
+                payload.get("project_number", ""),
+                payload.get("person_email", ""),
+                payload.get("started_at", ""),
+                payload.get("minutes", ""),
+                payload.get("description", ""),
+                "true" if payload.get("billable", True) else "false",
+            ])

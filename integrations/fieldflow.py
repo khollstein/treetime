@@ -41,8 +41,17 @@ def _next_color(existing_count: int) -> str:
 
 
 def _find_match(projects, project_number: str):
-    """Return a local Project whose name or keywords contain *project_number*."""
+    """Return the local Project for *project_number*, if we already have it.
+
+    The project_number column is authoritative; name/keyword matching is the
+    fallback for projects created before that column existed.
+    """
+    if not project_number:
+        return None
     pn_lower = project_number.lower()
+    for p in projects:
+        if (p.project_number or "").strip().lower() == pn_lower:
+            return p
     for p in projects:
         if pn_lower in p.name.lower():
             return p
@@ -145,6 +154,10 @@ def sync_projects(
             display_name = title or project_number
             keyword = rp.get("keyword") or ""  # don't keyword-match on a UUID
 
+        # The job code FieldFlow matches pushed time on. A UUID row-key is
+        # not one, so it is not stored as though it were.
+        stored_number = project_number if not _is_row_key(project_number) else ""
+
         try:
             match = _find_match(local_projects, project_number)
             if match:
@@ -157,6 +170,7 @@ def sync_projects(
                     color=match.color,
                     keywords=keyword,
                     billable=match.billable,
+                    project_number=stored_number or match.project_number,
                 )
                 updated += 1
             else:
@@ -169,6 +183,7 @@ def sync_projects(
                     color=color,
                     keywords=keyword,
                     billable=True,
+                    project_number=stored_number,
                 )
                 created += 1
         except Exception as exc:
