@@ -16,9 +16,10 @@ from ui.timeline.timeline_widget import TimelineWidget
 from ui.projects.project_manager import ProjectManager
 from ui.reports.report_view import ReportView
 from ui.styles import get_theme, set_theme, build_stylesheet, THEMES
-from ui.fieldflow_settings import FieldFlowSettingsDialog
+from ui.fieldflow_settings import FieldFlowSettingsDialog, show_push_result
 from ui.app_settings_dialog import AppSettingsDialog
 from integrations.fieldflow import sync_projects, DEFAULT_URL
+from integrations import fieldflow_time
 
 
 class MainWindow(QMainWindow):
@@ -83,6 +84,11 @@ class MainWindow(QMainWindow):
         self._sync_btn.clicked.connect(self._sync_fieldflow)
         status_bar.addPermanentWidget(self._sync_btn)
 
+        self._push_btn = QPushButton("Push Time")
+        self._push_btn.setToolTip("Send recent time entries to FieldFlow for review")
+        self._push_btn.clicked.connect(self._push_time)
+        status_bar.addPermanentWidget(self._push_btn)
+
         self._ff_settings_btn = QPushButton("FF Settings")
         self._ff_settings_btn.setToolTip("FieldFlow connection settings")
         self._ff_settings_btn.clicked.connect(self._open_fieldflow_settings)
@@ -92,6 +98,13 @@ class MainWindow(QMainWindow):
         self._auto_sync_timer = QTimer(self)
         self._auto_sync_timer.timeout.connect(self._maybe_auto_sync)
         self._restart_auto_sync_timer()
+
+        # Nightly time push. Checked every 15 minutes rather than scheduled
+        # for an exact moment, so a laptop that was asleep at the appointed
+        # hour still sends the day's time once it wakes up.
+        self._auto_push_timer = QTimer(self)
+        self._auto_push_timer.timeout.connect(self._maybe_auto_push)
+        self._auto_push_timer.start(15 * 60 * 1000)
 
         # Privacy toggle button — text changes to reflect current state
         self._privacy_btn = QPushButton()
@@ -192,15 +205,104 @@ class MainWindow(QMainWindow):
                 f"Updated {result['updated']} projects.",
             )
 
-        # Refresh the projects tab
+        # Refresh the projects tab and the timeline's matching
         self._projects._model.refresh()
+        self._timeline.refresh_projects()
 
     def _open_fieldflow_settings(self):
         dlg = FieldFlowSettingsDialog(self._conn, parent=self)
         dlg.sync_completed.connect(self._projects._model.refresh)
+        dlg.sync_completed.connect(self._timeline.refresh_projects)
         dlg.exec()
         # Re-evaluate auto-sync timer in case the user changed the interval
         self._restart_auto_sync_timer()
+
+    # ── Time push ─────────────────────────────────────────────────────
+
+    def _push_settings(self) -> dict:
+        def _int(key, default, low, high):
+            try:
+                value = int(get_setting(self._conn, key, str(default)) or default)
+            except ValueError:
+                value = default
+            return max(low, min(high, value))
+
+        return {
+            "api_key": get_setting(self._conn, "fieldflow_api_key", ""),
+            "endpoint": get_setting(self._conn, "fieldflow_time_endpoint_url",
+                                    fieldflow_time.DEFAULT_URL)
+                        or fieldflow_time.DEFAULT_URL,
+            "email": get_setting(self._conn, "fieldflow_person_email", ""),
+            "hour": _int("fieldflow_push_hour", 19, 0, 23),
+            "lookback_days": _int("fieldflow_push_lookback_days", 7, 1, 60),
+            "auto": get_setting(self._conn, "fieldflow_push_auto", "0") == "1",
+        }
+
+    def _push_time(self):
+        """Send recent time entries to FieldFlow (status bar shortcut)."""
+        settings = self._push_settings()
+        if not settings["api_key"] or not settings["email"]:
+            # Can't push without a key and an email — let the user supply them.
+            self._open_fieldflow_settings()
+            return
+
+        self._push_btn.setEnabled(False)
+        self._push_btn.setText("Pushing...")
+        try:
+            result = fieldflow_time.push_recent(
+                self._conn,
+                api_key=settings["api_key"],
+                lookback_days=settings["lookback_days"],
+                endpoint_url=settings["endpoint"],
+                person_email=settings["email"],
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Push Error", f"Unexpected error:\n{exc}")
+            return
+        finally:
+            self._push_btn.setEnabled(True)
+            self._push_btn.setText("Push Time")
+
+        self._record_push_time(bool(result["errors"]))
+        show_push_result(self, result)
+
+    def _record_push_time(self, had_errors: bool):
+        """Note when time last went out.
+
+        The date marker is what stops the nightly batch running twice, so a
+        push that couldn't reach FieldFlow doesn't set it — the next check
+        tries again rather than waiting until tomorrow.
+        """
+        now = datetime.now()
+        set_setting(self._conn, "fieldflow_last_push",
+                    now.strftime("%Y-%m-%d %H:%M:%S"))
+        if not had_errors:
+            set_setting(self._conn, "fieldflow_last_push_date",
+                        now.date().isoformat())
+
+    def _maybe_auto_push(self):
+        """Nightly batch. Runs once a day, quietly, after the chosen hour."""
+        settings = self._push_settings()
+        if not settings["auto"] or not settings["api_key"] or not settings["email"]:
+            return
+        now = datetime.now()
+        if now.hour < settings["hour"]:
+            return
+        if get_setting(self._conn, "fieldflow_last_push_date", "") == now.date().isoformat():
+            return
+        try:
+            result = fieldflow_time.push_recent(
+                self._conn,
+                api_key=settings["api_key"],
+                lookback_days=settings["lookback_days"],
+                endpoint_url=settings["endpoint"],
+                person_email=settings["email"],
+            )
+        except Exception:
+            # Quiet like auto-sync — failures are visible in FF Settings and
+            # every unsent entry is retried on the next push.
+            return
+        self._record_push_time(bool(result["errors"]))
 
     def _open_app_settings(self):
         dlg = AppSettingsDialog(self._conn, parent=self)
@@ -247,6 +349,7 @@ class MainWindow(QMainWindow):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             set_setting(self._conn, "fieldflow_last_sync", now_str)
             self._projects._model.refresh()
+            self._timeline.refresh_projects()
         except Exception:
             # Auto-sync failures stay quiet; user can hit Sync Now to see errors
             pass
@@ -278,7 +381,9 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index: int):
         if index == 0:
-            self._timeline.reload()
+            # Projects may have been edited on another tab, so pick up any
+            # new keywords and numbers rather than just redrawing.
+            self._timeline.refresh_projects()
 
     def reload_timeline(self):
         """Public method to force a timeline refresh (e.g. after offline assignment)."""

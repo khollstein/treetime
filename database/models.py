@@ -1,7 +1,19 @@
 """Dataclass representations of database rows."""
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
+
+
+def _looks_like_code(text: str) -> bool:
+    """True if *text* could be a job code — short, has a digit, no spaces."""
+    text = (text or "").strip()
+    if not (2 <= len(text) <= 24) or " " in text:
+        return False
+    if not any(c.isdigit() for c in text):
+        return False
+    # A raw UUID row-key is not a job code.
+    return len(text.replace("-", "")) < 32
 
 
 @dataclass
@@ -47,6 +59,7 @@ class Project:
     billable: bool
     archived: bool
     created_at: datetime
+    project_number: str = ""
 
     @classmethod
     def from_row(cls, row) -> "Project":
@@ -59,6 +72,10 @@ class Project:
             billable = bool(row["billable"])
         except (IndexError, KeyError):
             billable = True
+        try:
+            project_number = row["project_number"]
+        except (IndexError, KeyError):
+            project_number = ""
         return cls(
             id=row["id"],
             name=row["name"],
@@ -68,6 +85,7 @@ class Project:
             billable=billable,
             archived=bool(row["archived"]),
             created_at=datetime.fromisoformat(row["created_at"]),
+            project_number=project_number or "",
         )
 
     def keyword_list(self) -> list[str]:
@@ -75,6 +93,27 @@ class Project:
         if not self.keywords:
             return []
         return [k.strip().lower() for k in self.keywords.split(",") if k.strip()]
+
+    def resolved_project_number(self) -> str:
+        """The FieldFlow job code for this project, best effort.
+
+        Prefers the dedicated column, then the leading token of the display
+        name ("P-2842 — Lane Cove"), then a keyword that looks like a code.
+        FieldFlow matches on this, so a wrong guess is better caught by the
+        review screen than silently dropped here — anything without a digit
+        is not offered.
+        """
+        if self.project_number.strip():
+            return self.project_number.strip()
+
+        head = re.split(r"\s+[\u2014\u2013-]\s+", self.name.strip(), maxsplit=1)[0]
+        if _looks_like_code(head):
+            return head
+
+        for keyword in self.keyword_list():
+            if _looks_like_code(keyword):
+                return keyword
+        return ""
 
 
 @dataclass

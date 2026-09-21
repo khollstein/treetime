@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QRectF, Signal, QDate
 from PySide6.QtGui import QPainter, QColor, QFont, QPen
 
+from core.blocks import BlockOptions, build_blocks
+from core.matching import ProjectMatcher
 from ui.styles import color_for_process, IDLE_COLOR, OFFLINE_COLOR, get_theme
 from ui.timeline.timeline_model import TimelineModel
 
@@ -62,32 +64,22 @@ def _get_time_slots(model, zoom_minutes):
 
 
 class _KeywordMatchCache:
-    """Cache keyword matches to avoid DB queries in paintEvent."""
+    """Holds a ProjectMatcher so paintEvent never touches the database."""
 
     def __init__(self):
-        self._cache = {}
-        self._projects = None
+        self._matcher = None
 
     def invalidate(self):
-        self._cache.clear()
-        self._projects = None
+        self._matcher = None
+
+    def matcher(self, conn):
+        if self._matcher is None:
+            from database.queries import get_all_projects
+            self._matcher = ProjectMatcher(get_all_projects(conn))
+        return self._matcher
 
     def find_match(self, conn, process, title):
-        key = (process, title)
-        if key in self._cache:
-            return self._cache[key]
-        if self._projects is None:
-            from database.queries import get_all_projects
-            self._projects = get_all_projects(conn)
-        search_text = f"{process} {title}".lower()
-        best, best_score = None, 0
-        for p in self._projects:
-            for kw in p.keyword_list():
-                if kw in search_text and len(kw) > best_score:
-                    best_score = len(kw)
-                    best = p
-        self._cache[key] = best
-        return best
+        return self.matcher(conn).match(process, title)
 
 _match_cache = _KeywordMatchCache()
 
@@ -563,7 +555,10 @@ class TimelineWidget(QWidget):
         # Auto-assign button
         self._auto_btn = QPushButton("Auto-assign rules")
         self._auto_btn.setObjectName("primary")
-        self._auto_btn.setToolTip("Apply keyword rules to assign unmatched activities")
+        self._auto_btn.setToolTip(
+            "Apply keyword rules to unassigned activity. Short window switches\n"
+            "and brief idle time stay inside the block they interrupt."
+        )
         self._auto_btn.clicked.connect(self._auto_assign)
 
         zoom_label = QLabel("Zoom:")
@@ -664,6 +659,16 @@ class TimelineWidget(QWidget):
         self._model.reload()
         self._refresh()
 
+    def refresh_projects(self):
+        """Reload after projects may have changed (edited, or synced).
+
+        Keyword and project-number matching is cached, so it has to be
+        thrown away when the projects behind it move.
+        """
+        self._model.invalidate_project_cache()
+        _match_cache.invalidate()
+        self.reload()
+
     def _on_date_changed(self, qdate):
         self._load_date(date(qdate.year(), qdate.month(), qdate.day()))
 
@@ -683,15 +688,18 @@ class TimelineWidget(QWidget):
         self._time_entries.set_zoom(zoom)
 
     def _auto_assign(self):
-        """Apply keyword rules: find all unassigned activity segments, match
-        against project keywords, and create time entries automatically."""
+        """Apply keyword rules to the day's activity.
+
+        Blocks survive short interruptions — see core/blocks.py — so an hour
+        on a job stays one entry instead of a dozen fragments with the gaps
+        thrown away.
+        """
         from database.queries import (
             get_all_projects, insert_time_entry, get_time_entries_for_day,
         )
 
         day = self._model.current_day or date.today()
         segments = self._model.activity_segments
-        existing_entries = get_time_entries_for_day(self._conn, day)
         projects = get_all_projects(self._conn)
 
         if not segments or not projects:
@@ -699,78 +707,22 @@ class TimelineWidget(QWidget):
                                     "No activities or no projects with keywords to match.")
             return
 
-        # Build keyword → project mapping
-        keyword_map = []
-        for p in projects:
-            for kw in p.keyword_list():
-                keyword_map.append((kw, p))
-
-        if not keyword_map:
+        matcher = ProjectMatcher(projects)
+        if matcher.is_empty:
             QMessageBox.information(self, "Auto-assign",
-                "No projects have keywords set.\n\n"
+                "No projects have keywords or a project number set.\n\n"
                 "Go to Projects tab, edit a project, and add keywords like:\n"
                 "  QGIS, council, tree 71\n\n"
                 "These will be matched against your window titles.")
             return
 
-        # Find unassigned segments and match them
-        assigned_count = 0
-        # Group consecutive segments with the same match into blocks
-        current_match = None
-        block_start = None
-        block_end = None
+        covered = [(e.start_time, e.end_time)
+                   for e in get_time_entries_for_day(self._conn, day)]
+        options = BlockOptions.from_settings(self._conn)
+        result = build_blocks(segments, matcher, options, covered)
 
-        def _is_covered(seg_start, seg_end):
-            """Check if a segment is already covered by an existing time entry."""
-            mid = seg_start + (seg_end - seg_start) / 2
-            for entry in existing_entries:
-                if entry.start_time <= mid <= entry.end_time:
-                    return True
-            return False
-
-        def _flush_block():
-            nonlocal assigned_count, block_start, block_end, current_match
-            if current_match and block_start and block_end:
-                insert_time_entry(self._conn, current_match.id, block_start, block_end)
-                assigned_count += 1
-            current_match = None
-            block_start = None
-            block_end = None
-
-        for seg in segments:
-            if seg.idle or seg.offline:
-                _flush_block()
-                continue
-
-            seg_end = seg.end  # ActivitySegment already has .start and .end
-            if _is_covered(seg.start, seg_end):
-                _flush_block()
-                continue
-
-            # Check keyword match
-            search = f"{seg.process} {seg.title}".lower()
-            match = None
-            best_score = 0
-            for kw, proj in keyword_map:
-                if kw in search:
-                    score = len(kw)
-                    if score > best_score:
-                        best_score = score
-                        match = proj
-
-            if match:
-                if match == current_match and block_end:
-                    # Extend current block
-                    block_end = seg_end
-                else:
-                    _flush_block()
-                    current_match = match
-                    block_start = seg.start
-                    block_end = seg_end
-            else:
-                _flush_block()
-
-        _flush_block()
+        for block in result.blocks:
+            insert_time_entry(self._conn, block.project.id, block.start, block.end)
 
         # Reload
         self._model.reload()
@@ -778,12 +730,23 @@ class TimelineWidget(QWidget):
         _match_cache.invalidate()
         self._refresh()
 
-        if assigned_count > 0:
+        if not result.blocks:
             QMessageBox.information(self, "Auto-assign",
-                                    f"Created {assigned_count} time entries from keyword rules.")
-        else:
-            QMessageBox.information(self, "Auto-assign",
-                                    "No new matches found. All matching activities are already assigned.")
+                                    "No new matches found. All matching activities "
+                                    "are already assigned.")
+            return
+
+        message = (f"Created {len(result.blocks)} time "
+                   f"{'entry' if len(result.blocks) == 1 else 'entries'} "
+                   f"({_format_duration(result.total_s)}) from keyword rules.")
+        if result.bridged_count:
+            message += (
+                f"\n\nKept {result.bridged_count} short "
+                f"{'interruption' if result.bridged_count == 1 else 'interruptions'} "
+                f"({_format_duration(result.bridged_s)}) inside their blocks "
+                f"rather than dropping them."
+            )
+        QMessageBox.information(self, "Auto-assign", message)
 
     def _on_assign_from_memory(self, start, end, activities):
         from ui.timeline.assignment_dialog import AssignmentDialog

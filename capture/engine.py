@@ -22,6 +22,10 @@ class CaptureEngine(QObject):
     # times the poll interval, we assume the computer was asleep/locked.
     GAP_MULTIPLIER = 6  # e.g. 5s poll * 6 = 30s gap means offline
 
+    # Downtime between runs worth recording. Longer than this and we assume
+    # the machine was simply not in use.
+    MAX_RECOVERED_GAP_H = 24
+
     def __init__(self, conn: sqlite3.Connection,
                  poll_interval_ms: int = 5000,
                  idle_threshold_s: int = 300,
@@ -41,8 +45,44 @@ class CaptureEngine(QObject):
         self._consecutive_errors = 0
 
     def start(self):
+        self._recover_downtime()
         self._last_poll_time = datetime.now()
         self._timer.start(self._poll_interval_ms)
+
+    def _recover_downtime(self):
+        """Record the stretch since the last poll of the previous run.
+
+        Gap detection only works while Treetime is running, so a restart used
+        to leave an invisible hole in the day — the timeline showed nothing
+        and the user had no prompt to account for it. Write the same kind of
+        offline block the sleep/lock path writes.
+        """
+        try:
+            last = queries.get_last_activity(self._conn)
+            if last is None:
+                return
+            last_end = last.timestamp + timedelta(seconds=last.duration_s)
+            now = datetime.now()
+            gap = (now - last_end).total_seconds()
+            if gap <= max(60, (self._poll_interval_ms // 1000) * self.GAP_MULTIPLIER):
+                return
+            if gap > self.MAX_RECOVERED_GAP_H * 3600:
+                return
+            queries.insert_activity(
+                self._conn,
+                timestamp=last_end,
+                process="(offline)",
+                title="Treetime was not running",
+                idle=True,
+                duration_s=int(gap),
+                offline=True,
+            )
+            self.offline_ended.emit(last_end, now)
+        except Exception as exc:
+            try:
+                sys.stderr.write(f"[Treetime] downtime recovery failed: {exc}\n")
+            except Exception:
+                pass
 
     def stop(self):
         self._timer.stop()

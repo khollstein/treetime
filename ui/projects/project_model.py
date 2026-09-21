@@ -9,7 +9,7 @@ from database import queries
 from database.models import Project
 
 
-COLUMNS = ["Name", "Client", "Color", "Keywords", "Billable", "Status"]
+COLUMNS = ["Name", "Number", "Client", "Color", "Keywords", "Billable", "Status"]
 
 
 class ProjectTableModel(QAbstractTableModel):
@@ -46,23 +46,25 @@ class ProjectTableModel(QAbstractTableModel):
             if col == 0:
                 return p.name
             if col == 1:
-                return p.client
+                return p.project_number
             if col == 2:
-                return p.color
+                return p.client
             if col == 3:
-                return p.keywords
+                return p.color
             if col == 4:
-                return "\u2713" if p.billable else "\u2014"
+                return p.keywords
             if col == 5:
+                return "\u2713" if p.billable else "\u2014"
+            if col == 6:
                 return "Archived" if p.archived else "Active"
 
-        if role == Qt.ItemDataRole.BackgroundRole and col == 2:
+        if role == Qt.ItemDataRole.BackgroundRole and col == 3:
             return QColor(p.color)
 
-        if role == Qt.ItemDataRole.ForegroundRole and col == 2:
+        if role == Qt.ItemDataRole.ForegroundRole and col == 3:
             return QColor("white")
 
-        if role == Qt.ItemDataRole.TextAlignmentRole and col == 4:
+        if role == Qt.ItemDataRole.TextAlignmentRole and col == 5:
             return Qt.AlignmentFlag.AlignCenter
 
         return None

@@ -18,7 +18,7 @@ class ProjectEditDialog(QDialog):
     """Add/edit a project."""
 
     def __init__(self, name="", client="", color="#4A90D9",
-                 keywords="", billable=True, parent=None):
+                 keywords="", billable=True, project_number="", parent=None):
         super().__init__(parent)
         self.setWindowTitle("Project")
         self.setMinimumWidth(400)
@@ -33,6 +33,17 @@ class ProjectEditDialog(QDialog):
         self._client_edit = QLineEdit(client)
         self._client_edit.setPlaceholderText("e.g. North Sydney Council")
         layout.addRow("Client:", self._client_edit)
+
+        self._number_edit = QLineEdit(project_number)
+        self._number_edit.setPlaceholderText("e.g. P-2842")
+        number_help = QLabel(
+            "The FieldFlow job number. Filled in by FieldFlow sync; time "
+            "pushed back to FieldFlow is matched on it."
+        )
+        number_help.setWordWrap(True)
+        number_help.setStyleSheet("font-size: 10px; color: #888; margin-top: -4px;")
+        layout.addRow("Project number:", self._number_edit)
+        layout.addRow("", number_help)
 
         self._color = color
         self._color_btn = QPushButton()
@@ -89,6 +100,7 @@ class ProjectEditDialog(QDialog):
             "color": self._color,
             "keywords": self._keywords_edit.text().strip(),
             "billable": self._billable_check.isChecked(),
+            "project_number": self._number_edit.text().strip(),
         }
 
 
@@ -120,7 +132,9 @@ class ProjectManager(QWidget):
 
         # Search bar
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("Search projects by name, client or keyword...")
+        self._search_edit.setPlaceholderText(
+            "Search projects by name, number, client or keyword..."
+        )
         self._search_edit.setClearButtonEnabled(True)
         self._search_edit.textChanged.connect(self._on_search)
         layout.addWidget(self._search_edit)
@@ -143,9 +157,10 @@ class ProjectManager(QWidget):
             0, QHeaderView.ResizeMode.Stretch
         )
         self._table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.Stretch
+            4, QHeaderView.ResizeMode.Stretch  # Keywords
         )
-        self._table.setColumnWidth(4, 70)  # Billable column
+        self._table.setColumnWidth(1, 100)  # Number column
+        self._table.setColumnWidth(5, 70)   # Billable column
         self._table.verticalHeader().setVisible(False)
         self._table.doubleClicked.connect(self._edit_project)
         layout.addWidget(self._table)
@@ -168,6 +183,7 @@ class ProjectManager(QWidget):
             queries.insert_project(
                 self._conn, data["name"], data["client"],
                 data["color"], data["keywords"], data["billable"],
+                data["project_number"],
             )
             self._model.refresh()
 
@@ -178,6 +194,7 @@ class ProjectManager(QWidget):
         dlg = ProjectEditDialog(
             name=p.name, client=p.client, color=p.color,
             keywords=p.keywords, billable=p.billable,
+            project_number=p.project_number,
             parent=self,
         )
         if dlg.exec():
@@ -185,6 +202,7 @@ class ProjectManager(QWidget):
             queries.update_project(
                 self._conn, p.id, data["name"], data["client"],
                 data["color"], data["keywords"], data["billable"],
+                data["project_number"],
             )
             self._model.refresh()
 

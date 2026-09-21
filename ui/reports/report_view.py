@@ -12,7 +12,9 @@ from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QColor, QFont
 
 from database import queries
-from ui.reports.exporter import export_csv, export_timesheet_csv
+from ui.reports.exporter import (
+    export_csv, export_fieldflow_csv, export_timesheet_csv,
+)
 
 
 class ReportView(QWidget):
@@ -69,6 +71,14 @@ class ReportView(QWidget):
         self._export_btn = QPushButton("Export CSV")
         self._export_btn.clicked.connect(self._export_csv)
         mode_row.addWidget(self._export_btn)
+
+        self._ff_export_btn = QPushButton("Export for FieldFlow")
+        self._ff_export_btn.setToolTip(
+            "One row per time entry in FieldFlow's upload format — the "
+            "fallback for when pushing isn't set up"
+        )
+        self._ff_export_btn.clicked.connect(self._export_fieldflow_csv)
+        mode_row.addWidget(self._ff_export_btn)
 
         layout.addLayout(mode_row)
 
@@ -312,3 +322,34 @@ class ReportView(QWidget):
             )
             if filepath:
                 export_timesheet_csv(filepath, self._timesheet_data, start, end)
+
+    def _export_fieldflow_csv(self):
+        from PySide6.QtWidgets import QMessageBox
+        from integrations.fieldflow_time import build_export_payloads
+
+        start, end = self._get_start(), self._get_end()
+        payloads, problems = build_export_payloads(self._conn, start, end)
+        if not payloads:
+            detail = "\n".join(f"  \u2022 {p}" for p in problems[:10])
+            QMessageBox.information(
+                self, "Export for FieldFlow",
+                "Nothing to export for this date range."
+                + (f"\n\nNot exportable:\n{detail}" if detail else ""),
+            )
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Export for FieldFlow",
+            f"fieldflow_time_{start}_{end}.csv", "CSV Files (*.csv)"
+        )
+        if not filepath:
+            return
+        export_fieldflow_csv(filepath, payloads)
+
+        message = f"Exported {len(payloads)} entries to:\n{filepath}"
+        if problems:
+            detail = "\n".join(f"  \u2022 {p}" for p in problems[:10])
+            message += f"\n\nLeft out:\n{detail}"
+            if len(problems) > 10:
+                message += f"\n  \u2022 ...and {len(problems) - 10} more"
+        QMessageBox.information(self, "Export for FieldFlow", message)

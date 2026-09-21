@@ -116,11 +116,12 @@ def dismiss_activity(conn: sqlite3.Connection, activity_id: int):
 
 def insert_project(conn: sqlite3.Connection, name: str, client: str = "",
                    color: str = "#4A90D9", keywords: str = "",
-                   billable: bool = True) -> int:
+                   billable: bool = True, project_number: str = "") -> int:
     cur = conn.execute(
-        "INSERT INTO projects (name, client, color, keywords, billable, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (name, client, color, keywords, int(billable), datetime.now().isoformat()),
+        "INSERT INTO projects (name, client, color, keywords, project_number, "
+        "billable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, client, color, keywords, project_number, int(billable),
+         datetime.now().isoformat()),
     )
     conn.commit()
     return cur.lastrowid
@@ -128,12 +129,25 @@ def insert_project(conn: sqlite3.Connection, name: str, client: str = "",
 
 def update_project(conn: sqlite3.Connection, project_id: int, name: str,
                    client: str, color: str, keywords: str = "",
-                   billable: bool = True):
+                   billable: bool = True, project_number: str = ""):
     conn.execute(
-        "UPDATE projects SET name=?, client=?, color=?, keywords=?, billable=? WHERE id=?",
-        (name, client, color, keywords, int(billable), project_id),
+        "UPDATE projects SET name=?, client=?, color=?, keywords=?, "
+        "project_number=?, billable=? WHERE id=?",
+        (name, client, color, keywords, project_number, int(billable), project_id),
     )
     conn.commit()
+
+
+def get_project_by_number(conn: sqlite3.Connection,
+                          project_number: str) -> Optional[Project]:
+    """Exact (case-insensitive) lookup on the FieldFlow job code."""
+    if not project_number:
+        return None
+    row = conn.execute(
+        "SELECT * FROM projects WHERE lower(project_number) = lower(?) LIMIT 1",
+        (project_number.strip(),),
+    ).fetchone()
+    return Project.from_row(row) if row else None
 
 
 def archive_project(conn: sqlite3.Connection, project_id: int, archived: bool = True):
@@ -161,23 +175,14 @@ def get_project_by_id(conn: sqlite3.Connection, project_id: int) -> Optional[Pro
 
 def match_project_by_keywords(conn: sqlite3.Connection,
                               process: str, title: str) -> Optional[Project]:
-    """Find the best matching project based on keywords in process/title."""
-    projects = get_all_projects(conn)
-    search_text = f"{process} {title}".lower()
+    """Find the best matching project for a captured window.
 
-    best_match = None
-    best_score = 0
+    Delegates to the shared matcher so the assignment dialog, the timeline
+    dots and auto-assign all agree on what counts as a match.
+    """
+    from core.matching import ProjectMatcher
 
-    for p in projects:
-        keywords = p.keyword_list()
-        if not keywords:
-            continue
-        score = sum(1 for kw in keywords if kw in search_text)
-        if score > best_score:
-            best_score = score
-            best_match = p
-
-    return best_match
+    return ProjectMatcher(get_all_projects(conn)).match(process, title)
 
 
 # ── Time Entries ────────────────────────────────────────────────────
@@ -208,6 +213,17 @@ def update_time_entry(conn: sqlite3.Connection, entry_id: int,
 
 def delete_time_entry(conn: sqlite3.Connection, entry_id: int):
     conn.execute("DELETE FROM time_entries WHERE id=?", (entry_id,))
+    # If FieldFlow already has this entry, remember to withdraw it on the
+    # next push. If it never left the machine, forget it entirely.
+    conn.execute(
+        "UPDATE time_entry_sync SET status='pending_delete' "
+        "WHERE entry_id=? AND status IN ('sent', 'pending_delete')",
+        (entry_id,),
+    )
+    conn.execute(
+        "DELETE FROM time_entry_sync WHERE entry_id=? AND status != 'pending_delete'",
+        (entry_id,),
+    )
     conn.commit()
 
 
@@ -346,3 +362,75 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str):
         (key, value),
     )
     conn.commit()
+
+
+# ── FieldFlow push state ────────────────────────────────────────────
+
+def get_entries_for_push(conn: sqlite3.Connection,
+                         start_date: date, end_date: date) -> list[dict]:
+    """Time entries starting in the range, with everything a push needs."""
+    start = datetime(start_date.year, start_date.month, start_date.day).isoformat()
+    end = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59).isoformat()
+    rows = conn.execute(
+        """
+        SELECT te.id, te.start_time, te.end_time, te.note,
+               p.id AS project_id, p.name, p.client, p.keywords,
+               p.project_number, p.billable,
+               s.external_id, s.payload_hash, s.status
+        FROM time_entries te
+        JOIN projects p ON p.id = te.project_id
+        LEFT JOIN time_entry_sync s ON s.entry_id = te.id
+        WHERE te.start_time >= ? AND te.start_time <= ?
+        ORDER BY te.start_time
+        """,
+        (start, end),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_pending_deletions(conn: sqlite3.Connection) -> list[dict]:
+    """Entries FieldFlow has that no longer exist locally."""
+    rows = conn.execute(
+        "SELECT entry_id, external_id FROM time_entry_sync "
+        "WHERE status = 'pending_delete' ORDER BY entry_id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def record_push_attempt(conn: sqlite3.Connection, entry_id: int,
+                        external_id: str, payload_hash: str,
+                        status: str, error: str = ""):
+    """Remember what was sent for *entry_id*, so a resend is only for changes."""
+    conn.execute(
+        """
+        INSERT INTO time_entry_sync
+            (entry_id, external_id, payload_hash, status, last_error, pushed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(entry_id) DO UPDATE SET
+            external_id  = excluded.external_id,
+            payload_hash = excluded.payload_hash,
+            status       = excluded.status,
+            last_error   = excluded.last_error,
+            pushed_at    = excluded.pushed_at
+        """,
+        (entry_id, external_id, payload_hash, status, error,
+         datetime.now().isoformat()),
+    )
+    conn.commit()
+
+
+def clear_deletion(conn: sqlite3.Connection, entry_id: int):
+    """FieldFlow has taken the withdrawal — stop resending it."""
+    conn.execute(
+        "DELETE FROM time_entry_sync WHERE entry_id = ? AND status = 'pending_delete'",
+        (entry_id,),
+    )
+    conn.commit()
+
+
+def get_push_status_counts(conn: sqlite3.Connection) -> dict:
+    """Counts by push status, for the settings dialog."""
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM time_entry_sync GROUP BY status"
+    ).fetchall()
+    return {r["status"]: r["n"] for r in rows}
